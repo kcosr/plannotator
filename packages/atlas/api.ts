@@ -27,9 +27,21 @@ export function fetchSource(path: string, signal?: AbortSignal) {
   return request<SourceFile>(`/api/atlas/source?path=${encodeURIComponent(path)}`, { signal });
 }
 
-export async function fetchReferences(symbol: string, path: string, signal?: AbortSignal): Promise<ReferenceResponse> {
+export async function fetchReferences(
+  symbol: string,
+  path: string,
+  line: number,
+  column: number,
+  signal?: AbortSignal,
+): Promise<ReferenceResponse> {
+  const params = new URLSearchParams({
+    symbol,
+    path,
+    line: String(line),
+    column: String(column),
+  });
   return request<ReferenceResponse>(
-    `/api/atlas/references?symbol=${encodeURIComponent(symbol)}&path=${encodeURIComponent(path)}`,
+    `/api/atlas/references?${params}`,
     { signal },
   );
 }

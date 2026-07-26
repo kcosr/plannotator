@@ -67,6 +67,7 @@ button { color: inherit; }
   border-right: 1px solid var(--border); color: var(--muted-foreground); font-size: 10px; white-space: nowrap;
 }
 .atlas-index-status svg { color: #22c55e; }
+.atlas-index-status span { max-width: 210px; overflow: hidden; text-overflow: ellipsis; }
 .atlas-index-status time { color: var(--foreground); font-family: var(--font-mono); }
 .atlas-icon-button {
   appearance: none; width: 29px; height: 29px; flex: 0 0 29px;
@@ -318,6 +319,16 @@ diffs-container { --diffs-dark-bg: var(--background); --diffs-light-bg: var(--ba
 .atlas-inspector-header > span:nth-child(2) { min-width: 0; flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .atlas-inspector-header--sticky { position: sticky; top: 0; background: var(--sidebar); z-index: 2; border-top: 1px solid var(--border); }
 .atlas-symbol-list { max-height: 38%; overflow: auto; padding: 4px; }
+.atlas-semantic-status {
+  min-width: 0; min-height: 38px; padding: 7px 10px; display: flex; align-items: flex-start; gap: 7px;
+  border-bottom: 1px solid var(--border); color: var(--muted-foreground); background: color-mix(in oklab, var(--muted) 28%, transparent);
+}
+.atlas-semantic-status > svg { flex: none; margin-top: 1px; }
+.atlas-semantic-status.is-ready > svg { color: #22c55e; }
+.atlas-semantic-status.is-unavailable > svg { color: var(--warning); }
+.atlas-semantic-status > span { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.atlas-semantic-status strong { color: var(--foreground); font-size: 10px; font-weight: 600; }
+.atlas-semantic-status small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 9px var(--font-mono); }
 .atlas-symbol-list-item {
   width: 100%; min-width: 0; display: flex; flex-direction: column; gap: 2px; padding: 6px 7px;
   border: 0; border-radius: 4px; background: transparent; text-align: left; cursor: pointer;
@@ -326,6 +337,18 @@ diffs-container { --diffs-dark-bg: var(--background); --diffs-light-bg: var(--ba
 .atlas-symbol-list-item span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 10px var(--font-mono); }
 .atlas-symbol-list-item small { color: var(--muted-foreground); font-size: 9px; }
 .atlas-reference-panel { border-top: 1px solid var(--border); }
+.atlas-reference-provider {
+  min-width: 0; padding: 8px 9px; display: grid; grid-template-columns: 14px minmax(0, 1fr);
+  align-items: start; gap: 6px; border-bottom: 1px solid var(--border);
+  background: color-mix(in oklab, var(--muted) 22%, transparent); color: var(--muted-foreground);
+}
+.atlas-reference-provider > svg { margin-top: 1px; }
+.atlas-reference-provider.is-ready > svg { color: #22c55e; }
+.atlas-reference-provider.is-unavailable > svg { color: var(--warning); }
+.atlas-reference-provider > span { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
+.atlas-reference-provider strong { color: var(--foreground); font-size: 10px; font-weight: 600; }
+.atlas-reference-provider small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 9px var(--font-mono); }
+.atlas-reference-provider p { grid-column: 2; margin: 1px 0 0; font-size: 9px; line-height: 1.4; overflow-wrap: anywhere; }
 .atlas-reference-heading {
   width: 100%; height: 29px; padding: 0 8px; display: flex; align-items: center; gap: 5px;
   border: 0; background: transparent; color: var(--muted-foreground); cursor: pointer; text-align: left; font-size: 10px; font-weight: 650;

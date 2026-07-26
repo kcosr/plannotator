@@ -46,6 +46,7 @@ const VIEWS: { id: AtlasView; label: string; icon: React.ComponentType<{ size?: 
 interface SourceNavigation {
   path: string;
   line?: number;
+  column?: number;
   symbol?: string;
 }
 
@@ -389,7 +390,7 @@ export default function AtlasApp() {
         <div className="atlas-header-actions">
           <div className="atlas-index-status" title={`Index completed ${new Date(snapshot.generatedAt).toLocaleString()}`}>
             <CircleCheck size={13} aria-hidden />
-            <span>Indexed</span>
+            <span>Indexed · {snapshot.analyzers.structural.name} {snapshot.analyzers.structural.version}</span>
             <time dateTime={snapshot.generatedAt}>{formatIndexedAt(snapshot.generatedAt)}</time>
           </div>
           <button type="button" className="atlas-icon-button" title="Refresh index" onClick={() => void refresh()}><RefreshCw size={15} /></button>
@@ -545,14 +546,21 @@ export default function AtlasApp() {
                 </div>
                 <SymbolMap
                   file={selectedFile}
-                  onOpen={(symbol: AtlasSymbol) => openSource({ path: selectedFile.path, line: symbol.line, symbol: symbol.name })}
+                  onOpen={(symbol: AtlasSymbol) => openSource({
+                    path: selectedFile.path,
+                    line: symbol.line,
+                    column: symbol.column,
+                    symbol: symbol.name,
+                  })}
                 />
               </div>
             )}
             {view === 'source' && selectedFile && (
               <SourceView
                 node={selectedFile}
+                analyzers={snapshot.analyzers}
                 targetLine={currentSourceTarget?.path === selectedFile.path ? currentSourceTarget.line : undefined}
+                targetColumn={currentSourceTarget?.path === selectedFile.path ? currentSourceTarget.column : undefined}
                 targetSymbol={currentSourceTarget?.path === selectedFile.path ? currentSourceTarget.symbol : undefined}
                 onNavigateFile={openSource}
               />

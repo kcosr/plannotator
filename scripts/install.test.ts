@@ -317,6 +317,7 @@ describe("install.sh", () => {
     );
     const minimalExit = script.indexOf('if [ "$minimal" -eq 1 ]; then');
     const semInstall = script.indexOf("install_sem_sidecar\n");
+    const astGrepInstall = script.indexOf("install_ast_grep_sidecar\n");
     const agentTerminal = script.indexOf("install_agent_terminal_runtime\n");
     const codexBlock = script.indexOf(
       "# --- Codex CLI / Desktop app support",
@@ -329,6 +330,7 @@ describe("install.sh", () => {
     expect(minimalExit).toBeGreaterThan(binaryInstalled);
     // Everything the reporter called "trash" runs strictly after the exit gate.
     expect(semInstall).toBeGreaterThan(minimalExit);
+    expect(astGrepInstall).toBeGreaterThan(minimalExit);
     expect(agentTerminal).toBeGreaterThan(minimalExit);
     expect(codexBlock).toBeGreaterThan(minimalExit);
     expect(skillsCheckout).toBeGreaterThan(minimalExit);
@@ -512,12 +514,14 @@ describe("install.ps1", () => {
     );
     const minimalExit = script.indexOf("if ($minimal) {");
     const semInstall = script.indexOf("Install-SemSidecar\n");
+    const astGrepInstall = script.indexOf("Install-AstGrepSidecar\n");
     const pathAdvice = script.indexOf("function Show-PathAdvice");
 
     expect(binaryInstalled).toBeGreaterThan(0);
     expect(pathAdvice).toBeGreaterThan(binaryInstalled);
     expect(minimalExit).toBeGreaterThan(binaryInstalled);
     expect(semInstall).toBeGreaterThan(minimalExit);
+    expect(astGrepInstall).toBeGreaterThan(minimalExit);
     // The gate exits rather than falling through.
     const gateBody = script.slice(minimalExit, minimalExit + 400);
     expect(gateBody).toContain("exit 0");
@@ -705,11 +709,13 @@ describe("install.cmd", () => {
     );
     const minimalExit = script.indexOf('if "!MINIMAL!"=="1" (');
     const semInstall = script.indexOf("call :InstallSemSidecar");
+    const astGrepInstall = script.indexOf("call :InstallAstGrepSidecar");
     const printPathAdvice = script.indexOf(":PrintPathAdvice");
 
     expect(binaryInstalled).toBeGreaterThan(0);
     expect(minimalExit).toBeGreaterThan(binaryInstalled);
     expect(semInstall).toBeGreaterThan(minimalExit);
+    expect(astGrepInstall).toBeGreaterThan(minimalExit);
     // The gate exits rather than falling through, and reuses :PrintPathAdvice.
     const gateBody = script.slice(minimalExit, minimalExit + 400);
     expect(gateBody).toContain("call :PrintPathAdvice");
@@ -1180,6 +1186,84 @@ describe("install shared behavior", () => {
     expect(cmdScript).toContain("--connect-timeout 10 --max-time 120");
     // And the opt-out is documented in the help text.
     expect(sh).toContain("PLANNOTATOR_SKIP_SEM_INSTALL=1");
+  });
+
+  test("all installers securely install the pinned ast-grep sidecar", () => {
+    const cmdScript = readScript("install.cmd");
+    const expectedAssets = {
+      "app-aarch64-apple-darwin.zip": "ec2e3680f4f84c68b48420bcca01d21389787c7318b52083dde6f46ac12ad946",
+      "app-x86_64-apple-darwin.zip": "78d0d9db2f4dfd964fd313e70e92571c6d4204243ad8f3d0abbb2ffc56e45fc6",
+      "app-aarch64-unknown-linux-gnu.zip": "62b60892dafacfa76d6de87157659f880bbf85ff38bdab52db12f1f14ec60f94",
+      "app-x86_64-unknown-linux-gnu.zip": "78931ae35ebac33d9a72b3aecea3e3d62d6e5b0b718ac8bbedfbe69d68421e41",
+      "app-aarch64-pc-windows-msvc.zip": "0c0ec11916d77002ddff86f3f43cabd03d2d63189d54a1aedc5141592e7ac23d",
+      "app-x86_64-pc-windows-msvc.zip": "a1b5b7c06994992755d4cd0b9cf10c2f4a6e7b4a82d2810edee5985a59f67ac5",
+    };
+
+    expect(sh).toContain('AST_GREP_REPO="ast-grep/ast-grep"');
+    expect(sh).toContain('AST_GREP_VERSION="0.45.0"');
+    expect(sh).toContain("install_ast_grep_sidecar");
+    expect(sh).toContain('${_config_dir}/vendor/ast-grep/${AST_GREP_VERSION}');
+    expect(sh).toContain("PLANNOTATOR_SKIP_AST_GREP_INSTALL");
+    expect(sh).toContain("python3 -m zipfile -e");
+    expect(sh).toContain('mv -f "$staged_ast_grep" "$ast_grep_bin"');
+    expect(sh).toContain("Explore indexing requires ast-grep");
+
+    expect(ps).toContain('$astGrepRepo = "ast-grep/ast-grep"');
+    expect(ps).toContain('$astGrepVersion = "0.45.0"');
+    expect(ps).toContain("function Install-AstGrepSidecar");
+    expect(ps).toContain('vendor\\ast-grep\\$astGrepVersion');
+    expect(ps).toContain("PLANNOTATOR_SKIP_AST_GREP_INSTALL");
+    expect(ps).toContain("Move-Item -Force");
+
+    expect(cmdScript).toContain('set "AST_GREP_REPO=ast-grep/ast-grep"');
+    expect(cmdScript).toContain('set "AST_GREP_VERSION=0.45.0"');
+    expect(cmdScript).toContain("call :InstallAstGrepSidecar");
+    expect(cmdScript).toContain("PLANNOTATOR_SKIP_AST_GREP_INSTALL");
+    expect(cmdScript).toContain('vendor\\ast-grep\\!AST_GREP_VERSION!');
+
+    for (const [asset, digest] of Object.entries(expectedAssets)) {
+      const relevantScripts = asset.includes("windows") ? [ps, cmdScript] : [sh];
+      for (const installer of relevantScripts) {
+        expect(installer).toContain(asset);
+        expect(installer).toContain(digest);
+      }
+    }
+
+    // Digests are pinned from the official GitHub release asset metadata.
+    // The installer must not trust a second mutable checksum download.
+    for (const installer of [sh, ps, cmdScript]) {
+      expect(installer).not.toContain("ast-grep-checksums");
+      expect(installer).toContain("https://github.com/");
+      expect(installer).toContain("releases/download/");
+      expect(installer).toContain("Skipping ast-grep sidecar install");
+      expect(installer).toContain("120");
+    }
+  });
+
+  test("ast-grep environment controls and managed location are documented", () => {
+    const agents = readFileSync(join(scriptsDir, "..", "AGENTS.md"), "utf-8");
+    const readme = readFileSync(join(scriptsDir, "..", "README.md"), "utf-8");
+    for (const doc of [agents, readme]) {
+      expect(doc).toContain("PLANNOTATOR_AST_GREP_PATH");
+      expect(doc).toContain("PLANNOTATOR_SKIP_AST_GREP_INSTALL");
+      expect(doc).toContain("0.45.0");
+    }
+  });
+
+  test("runtime manifests pin ast-grep and JSON-RPC dependencies", () => {
+    const rootPackage = JSON.parse(
+      readFileSync(join(scriptsDir, "..", "package.json"), "utf-8"),
+    );
+    const piPackage = JSON.parse(
+      readFileSync(
+        join(scriptsDir, "..", "apps", "pi-extension", "package.json"),
+        "utf-8",
+      ),
+    );
+    for (const manifest of [rootPackage, piPackage]) {
+      expect(manifest.dependencies["@ast-grep/cli"]).toBe("0.45.0");
+      expect(manifest.dependencies["vscode-jsonrpc"]).toBe("8.2.1");
+    }
   });
 
   test("all installers install agent terminal runtime as a non-fatal optional dependency", () => {

@@ -5,6 +5,8 @@
   "exports": {
     "./agents": "./agents.ts",
     "./atlas": "./atlas.ts",
+    "./atlas-semantic": "./atlas-semantic.ts",
+    "./atlas-structure": "./atlas-structure.ts",
     "./annotatable": "./annotatable.ts",
     "./compress": "./compress.ts",
     "./crypto": "./crypto.ts",

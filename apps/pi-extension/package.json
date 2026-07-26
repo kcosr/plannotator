@@ -49,13 +49,15 @@
     "prepublishOnly": "cd ../.. && bun run build:pi"
   },
   "dependencies": {
+    "@ast-grep/cli": "0.45.0",
     "@joplin/turndown-plugin-gfm": "^1.0.64",
     "@pierre/diffs": "1.2.8",
     "@plannotator/webtui": "0.1.0",
     "chokidar": "^5.0.0",
     "diff": "^8.0.4",
     "parse5": "^7.3.0",
-    "turndown": "^7.2.4"
+    "turndown": "^7.2.4",
+    "vscode-jsonrpc": "8.2.1"
   },
   "peerDependencies": {
     "@earendil-works/pi-coding-agent": ">=0.74.0"

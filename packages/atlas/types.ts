@@ -8,6 +8,7 @@ export interface AtlasSymbol {
   name: string;
   kind: 'class' | 'interface' | 'type' | 'enum' | 'struct' | 'trait' | 'function' | 'method' | 'variable' | 'module' | 'other';
   line: number;
+  column: number;
   endLine: number;
   complexity: number;
   exported: boolean;
@@ -55,7 +56,7 @@ export interface AtlasSummary {
 }
 
 export interface AtlasSnapshot {
-  version: 1;
+  version: 2;
   rootPath: string;
   rootName: string;
   rootId: string;
@@ -63,6 +64,28 @@ export interface AtlasSnapshot {
   nodes: AtlasNode[];
   dependencies: AtlasDependency[];
   summary: AtlasSummary;
+  analyzers: AtlasAnalyzers;
+}
+
+export interface AtlasAnalyzers {
+  structural: {
+    name: 'ast-grep';
+    version: string;
+    source: string;
+    languages: string[];
+  };
+  semantic: {
+    protocol: 'lsp';
+    providers: SemanticProvider[];
+  };
+}
+
+export interface SemanticProvider {
+  language: string;
+  name: string;
+  available: boolean;
+  source?: string;
+  reason?: string;
 }
 
 export interface SourceFile {
@@ -84,4 +107,10 @@ export interface ReferenceLocation {
 export interface ReferenceResponse {
   definitions: ReferenceLocation[];
   references: ReferenceLocation[];
+  provider: {
+    kind: 'lsp' | 'syntax';
+    name: string;
+    status: 'ready' | 'unavailable';
+    message?: string;
+  };
 }

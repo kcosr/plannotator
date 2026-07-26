@@ -4,7 +4,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildAtlasSnapshot } from "./atlas";
 import {
-	findAtlasReferences,
+	findAtlasDeclarations,
 	readAtlasSource,
 	resolveAtlasSourcePath,
 	validateAtlasRelativePath,
@@ -56,7 +56,11 @@ describe("buildAtlasSnapshot", () => {
 		const root = await fixture();
 		const snapshot = await buildAtlasSnapshot(root);
 
-		expect(snapshot.version).toBe(1);
+		expect(snapshot.version).toBe(2);
+		expect(snapshot.analyzers.structural).toEqual(expect.objectContaining({
+			name: "ast-grep",
+			version: expect.any(String),
+		}));
 		expect(snapshot.rootId).toBe("root");
 		expect(snapshot.summary.files).toBe(3);
 		expect(snapshot.summary.directories).toBe(1);
@@ -75,9 +79,11 @@ describe("buildAtlasSnapshot", () => {
 		expect(main?.language).toBe("typescript");
 		expect(math?.symbols.map((symbol) => [symbol.kind, symbol.name])).toEqual([
 			["interface", "Operation"],
+			["method", "run"],
 			["type", "Numeric"],
 			["function", "double"],
 		]);
+		expect(math?.symbols.every((symbol) => symbol.column > 0)).toBe(true);
 		expect(main?.symbols.some((symbol) => symbol.name === "Numeric")).toBe(false);
 		expect(math?.complexity).toBeGreaterThan(1);
 		expect(math?.symbols[0]?.complexity).toBe(1);
@@ -153,16 +159,16 @@ describe("Atlas source helpers", () => {
 		expect(source.content).toContain("double(value)");
 		expect(source.language).toBe("typescript");
 
-		const references = await findAtlasReferences(snapshot, "double", undefined, {
+		const references = await findAtlasDeclarations(snapshot, "double", undefined, {
 			maxResults: 2,
 		});
-		expect(references).toHaveLength(2);
-		expect(references.map((reference) => reference.filePath)).toContain("src/main.ts");
-		expect(references.map((reference) => reference.kind)).toContain("definition");
+		expect(references).toHaveLength(1);
+		expect(references[0]?.filePath).toBe("src/math.ts");
+		expect(references[0]?.kind).toBe("definition");
 		expect(references[0]?.line).toBeGreaterThan(0);
 
-		const filtered = await findAtlasReferences(snapshot, "double", "src/math.ts");
-		expect(filtered).toHaveLength(3);
+		const filtered = await findAtlasDeclarations(snapshot, "double", "src/math.ts");
+		expect(filtered).toHaveLength(1);
 		expect(filtered[0]).toEqual(expect.objectContaining({
 			kind: "definition",
 			filePath: "src/math.ts",

@@ -9,10 +9,15 @@ import { realpathSync, statSync } from "node:fs";
 import { isAbsolute, relative, resolve } from "node:path";
 import {
   buildAtlasSnapshot,
-  findAtlasReferences,
   readAtlasSource,
+  resolveAtlasReferences,
+  type AtlasSemanticProviderCapability,
   type AtlasSnapshot,
 } from "@plannotator/shared/atlas";
+import {
+  AtlasSemanticSession,
+  probeAtlasSemanticCapabilities,
+} from "@plannotator/shared/atlas-semantic";
 import { isWithinDirectory } from "@plannotator/shared/html-assets-node";
 import {
   getServerHostname,
@@ -80,6 +85,7 @@ export async function startExploreServer(
   let snapshot: AtlasSnapshot | undefined;
   let indexingError: string | undefined;
   let activeBuild: Promise<void> | undefined;
+  const semanticSession = new AtlasSemanticSession();
   let stopped = false;
   let closeResolved = false;
   let resolveClose!: () => void;
@@ -97,7 +103,20 @@ export async function startExploreServer(
     status = "indexing";
     indexingError = undefined;
     activeBuild = Promise.resolve()
-      .then(() => buildAtlasSnapshot(rootPath))
+      .then(async () => {
+        const capabilities = await probeAtlasSemanticCapabilities();
+        const semanticProviders: AtlasSemanticProviderCapability[] = Object.values(capabilities)
+          .map((capability) => ({
+            language: capability.language,
+            name: capability.serverId,
+            available: capability.available,
+            ...(capability.command && {
+              source: process.env[capability.envVariable]?.trim() ? "env" : "path",
+            }),
+            ...(capability.reason && { reason: capability.reason }),
+          }));
+        return buildAtlasSnapshot(rootPath, { semanticProviders });
+      })
       .then((nextSnapshot) => {
         if (stopped) return;
         snapshot = nextSnapshot;
@@ -176,17 +195,24 @@ export async function startExploreServer(
           }
 
           const requestedPath = url.searchParams.get("path") || undefined;
-          let sourcePath: string | undefined;
-          if (requestedPath) {
-            const normalizedPath = normalizeSourcePath(rootPath, requestedPath);
-            if (!normalizedPath) return jsonError("Source file not found", 404);
-            sourcePath = normalizedPath;
+          if (!requestedPath) return jsonError("Missing path parameter", 400);
+          const sourcePath = normalizeSourcePath(rootPath, requestedPath);
+          if (!sourcePath) return jsonError("Source file not found", 404);
+          const line = Number(url.searchParams.get("line"));
+          const column = Number(url.searchParams.get("column"));
+          if (!Number.isInteger(line) || line < 1 || !Number.isInteger(column) || column < 1) {
+            return jsonError("Line and column must be positive integers", 400);
           }
-          const locations = await findAtlasReferences(snapshot, symbol, sourcePath);
-          return Response.json({
-            definitions: locations.filter((location) => location.kind === "definition"),
-            references: locations.filter((location) => location.kind === "reference"),
-          });
+          return Response.json(
+            await resolveAtlasReferences(
+              semanticSession,
+              snapshot,
+              symbol,
+              sourcePath,
+              line,
+              column,
+            ),
+          );
         }
 
         if (method === "POST" && url.pathname === "/api/atlas/refresh") {
@@ -195,6 +221,7 @@ export async function startExploreServer(
         }
 
         if (method === "POST" && url.pathname === "/api/atlas/close") {
+          await semanticSession.dispose();
           resolveCloseOnce();
           return Response.json({ ok: true });
         }
@@ -239,6 +266,7 @@ export async function startExploreServer(
       if (stopped) return;
       stopped = true;
       resolveCloseOnce();
+      void semanticSession.dispose();
       server.stop();
     },
   };

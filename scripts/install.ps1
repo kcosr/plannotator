@@ -32,9 +32,9 @@ if ($Minimal -and $NoMinimal) {
 }
 
 # Binary-only mode. Installs just the plannotator binary and no persistent state
-# elsewhere - no sem sidecar, agent-terminal runtime, skills, hooks, or per-agent
-# config. Precedence: -Minimal / -NoMinimal switch > PLANNOTATOR_MINIMAL env var
-# > default (off). Mirrors install.sh's --minimal / --no-minimal.
+# elsewhere - no sem or ast-grep sidecars, agent-terminal runtime, skills,
+# hooks, or per-agent config. Precedence: -Minimal / -NoMinimal switch >
+# PLANNOTATOR_MINIMAL env var > default (off). Mirrors install.sh.
 $minimal = $false
 if ($env:PLANNOTATOR_MINIMAL -match '^(1|true|yes)$') {
     $minimal = $true
@@ -45,6 +45,8 @@ if ($NoMinimal) { $minimal = $false }
 $repo = "backnotprop/plannotator"
 $semRepo = "Ataraxy-Labs/sem"
 $semVersion = "v0.8.0"
+$astGrepRepo = "ast-grep/ast-grep"
+$astGrepVersion = "0.45.0"
 $installDir = "$env:LOCALAPPDATA\plannotator"
 
 # First plannotator release that carries SLSA build-provenance attestations.
@@ -207,6 +209,96 @@ function Install-SemSidecar {
         Write-Host "Skipping semantic diff sidecar install ($($_.Exception.Message))"
     } finally {
         Remove-Item -Recurse -Force $tmpSemDir -ErrorAction SilentlyContinue
+    }
+}
+
+function Install-AstGrepSidecar {
+    if ($env:PLANNOTATOR_SKIP_AST_GREP_INSTALL -match '^(1|true|yes)$') {
+        Write-Host "Skipping ast-grep sidecar install (PLANNOTATOR_SKIP_AST_GREP_INSTALL is set)"
+        return
+    }
+
+    # SHA256 values are pinned from the GitHub release asset digest metadata.
+    $release = switch ($platform) {
+        "win32-x64" {
+            @{
+                Asset = "app-x86_64-pc-windows-msvc.zip"
+                Sha256 = "a1b5b7c06994992755d4cd0b9cf10c2f4a6e7b4a82d2810edee5985a59f67ac5"
+            }
+        }
+        "win32-arm64" {
+            @{
+                Asset = "app-aarch64-pc-windows-msvc.zip"
+                Sha256 = "0c0ec11916d77002ddff86f3f43cabd03d2d63189d54a1aedc5141592e7ac23d"
+            }
+        }
+        default { $null }
+    }
+    if (-not $release) {
+        Write-Host "Skipping ast-grep sidecar install (ast-grep does not publish $platform)"
+        return
+    }
+
+    $astGrepDir = Join-Path $configDir "vendor\ast-grep\$astGrepVersion"
+    $astGrepPath = Join-Path $astGrepDir "ast-grep.exe"
+    if (Test-Path $astGrepPath) {
+        try {
+            $versionText = & $astGrepPath --version 2>$null
+            if ($LASTEXITCODE -eq 0 -and $versionText -eq "ast-grep $astGrepVersion") {
+                Write-Host "ast-grep sidecar already installed at $astGrepPath"
+                return
+            }
+        } catch {
+            # Replace invalid stale sidecar below.
+        }
+    }
+
+    $tmpDir = Join-Path ([System.IO.Path]::GetTempPath()) "plannotator-ast-grep-$([System.Guid]::NewGuid().ToString('N'))"
+    try {
+        New-Item -ItemType Directory -Force -Path $tmpDir | Out-Null
+    } catch {
+        Write-Host "Skipping ast-grep sidecar install (temporary directory creation failed); Explore indexing requires ast-grep"
+        return
+    }
+    $stagedPath = $null
+
+    try {
+        $archive = Join-Path $tmpDir $release.Asset
+        $extractDir = Join-Path $tmpDir "extract"
+        $url = "https://github.com/$astGrepRepo/releases/download/$astGrepVersion/$($release.Asset)"
+        Invoke-WebRequest -Uri $url -OutFile $archive -UseBasicParsing -TimeoutSec 120
+
+        $actual = (Get-FileHash -Path $archive -Algorithm SHA256).Hash.ToLower()
+        if ($actual -ne $release.Sha256) {
+            Write-Host "Skipping ast-grep sidecar install (pinned checksum mismatch; archive was not installed)"
+            return
+        }
+
+        Expand-Archive -Force -Path $archive -DestinationPath $extractDir
+        $extracted = Get-ChildItem -Path $extractDir -Filter "ast-grep.exe" -Recurse -File | Select-Object -First 1
+        if (-not $extracted) {
+            Write-Host "Skipping ast-grep sidecar install (binary missing from verified archive)"
+            return
+        }
+
+        New-Item -ItemType Directory -Force -Path $astGrepDir | Out-Null
+        $stagedPath = Join-Path $astGrepDir ".ast-grep-$([System.Guid]::NewGuid().ToString('N')).exe"
+        Copy-Item -Force $extracted.FullName $stagedPath
+        $versionText = & $stagedPath --version 2>$null
+        if ($LASTEXITCODE -ne 0 -or $versionText -ne "ast-grep $astGrepVersion") {
+            Remove-Item -Force $stagedPath -ErrorAction SilentlyContinue
+            Write-Host "Skipping ast-grep sidecar install (verified archive contained an unexpected binary version)"
+            return
+        }
+        Move-Item -Force $stagedPath $astGrepPath
+        Write-Host "ast-grep sidecar installed to $astGrepPath"
+    } catch {
+        Write-Host "Skipping ast-grep sidecar install ($($_.Exception.Message)); Explore indexing requires ast-grep"
+    } finally {
+        if ($stagedPath -and (Test-Path $stagedPath)) {
+            Remove-Item -Force $stagedPath -ErrorAction SilentlyContinue
+        }
+        Remove-Item -Recurse -Force $tmpDir -ErrorAction SilentlyContinue
     }
 }
 
@@ -379,8 +471,8 @@ function Show-PathAdvice {
 # Binary-only mode stops here (see the $minimal resolution near the top): the
 # binary is installed, so add it to PATH and exit before any sidecar download,
 # agent integration, skill checkout, config write, or cleanup runs. Only the
-# binary and its PATH entry are added - none of the sem sidecar, agent-terminal
-# runtime, or per-agent skills, hooks, or config.
+# binary and its PATH entry are added - none of the sem or ast-grep sidecars,
+# agent-terminal runtime, or per-agent skills, hooks, or config.
 if ($minimal) {
     Show-PathAdvice
     Write-Host ""
@@ -390,6 +482,7 @@ if ($minimal) {
 }
 
 Install-SemSidecar
+Install-AstGrepSidecar
 Install-AgentTerminalRuntime
 
 Show-PathAdvice

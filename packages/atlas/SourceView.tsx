@@ -6,23 +6,29 @@ import {
   ArrowRight,
   Braces,
   ChevronDown,
+  CircleCheck,
+  CircleSlash,
   Copy,
   FileCode2,
   LocateFixed,
   Search,
 } from 'lucide-react';
 import { fetchReferences, fetchSource } from './api';
-import type { AtlasNode, AtlasSymbol, ReferenceLocation, ReferenceResponse, SourceFile } from './types';
+import { referencePositionFromToken } from './referencePosition';
+import type { AtlasAnalyzers, AtlasNode, AtlasSymbol, ReferenceLocation, ReferenceResponse, SourceFile } from './types';
 
 interface NavigationTarget {
   path: string;
   line?: number;
+  column?: number;
   symbol?: string;
 }
 
 interface SourceViewProps {
   node: AtlasNode;
+  analyzers: AtlasAnalyzers;
   targetLine?: number;
+  targetColumn?: number;
   targetSymbol?: string;
   onNavigateFile: (target: NavigationTarget) => void;
 }
@@ -63,7 +69,14 @@ function ReferenceGroup({
   );
 }
 
-export function SourceView({ node, targetLine, targetSymbol, onNavigateFile }: SourceViewProps) {
+export function SourceView({
+  node,
+  analyzers,
+  targetLine,
+  targetColumn,
+  targetSymbol,
+  onNavigateFile,
+}: SourceViewProps) {
   const [source, setSource] = useState<SourceFile | null>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
@@ -71,6 +84,8 @@ export function SourceView({ node, targetLine, targetSymbol, onNavigateFile }: S
   const [matchIndex, setMatchIndex] = useState(0);
   const [referenceState, setReferenceState] = useState<{
     symbol: string;
+    line: number;
+    column: number;
     loading: boolean;
     result: ReferenceResponse | null;
     error?: string;
@@ -119,15 +134,17 @@ export function SourceView({ node, targetLine, targetSymbol, onNavigateFile }: S
     setMatchIndex((current) => Math.min(current, matches.length - 1));
   }, [matches.length]);
 
-  const inspectSymbol = useCallback((symbol: string) => {
+  const inspectSymbol = useCallback((symbol: string, line: number, column: number) => {
     const clean = symbol.trim();
     if (!clean) return;
     const controller = new AbortController();
-    setReferenceState({ symbol: clean, loading: true, result: null });
-    fetchReferences(clean, node.path, controller.signal)
-      .then((result) => setReferenceState({ symbol: clean, loading: false, result }))
+    setReferenceState({ symbol: clean, line, column, loading: true, result: null });
+    fetchReferences(clean, node.path, line, column, controller.signal)
+      .then((result) => setReferenceState({ symbol: clean, line, column, loading: false, result }))
       .catch((reason: unknown) => setReferenceState({
         symbol: clean,
+        line,
+        column,
         loading: false,
         result: null,
         error: reason instanceof Error ? reason.message : String(reason),
@@ -135,13 +152,15 @@ export function SourceView({ node, targetLine, targetSymbol, onNavigateFile }: S
   }, [node.path]);
 
   useEffect(() => {
-    if (targetSymbol) inspectSymbol(targetSymbol);
-  }, [targetSymbol, inspectSymbol]);
+    if (targetSymbol && targetLine && targetColumn) {
+      inspectSymbol(targetSymbol, targetLine, targetColumn);
+    }
+  }, [targetSymbol, targetLine, targetColumn, inspectSymbol]);
 
   const onTokenClick = useCallback((props: TokenEventBase, event: MouseEvent) => {
     if (!(event.metaKey || event.ctrlKey)) return;
-    const value = props.tokenText.replace(/^[^\w$]+|[^\w$]+$/g, '');
-    if (value) inspectSymbol(value);
+    const position = referencePositionFromToken(props);
+    if (position) inspectSymbol(position.symbol, position.line, position.column);
   }, [inspectSymbol]);
 
   const selectedLines: SelectedLineRange | null = targetLine
@@ -150,7 +169,9 @@ export function SourceView({ node, targetLine, targetSymbol, onNavigateFile }: S
       ? { start: matches[matchIndex], end: matches[matchIndex] }
       : null;
 
-  const symbolsByName = useMemo(() => new Map(node.symbols.map((symbol) => [symbol.name, symbol])), [node.symbols]);
+  const semanticProvider = analyzers.semantic.providers.find(
+    (provider) => provider.language.toLowerCase() === node.language?.toLowerCase(),
+  );
 
   return (
     <div className="atlas-source-layout">
@@ -246,6 +267,16 @@ export function SourceView({ node, targetLine, targetSymbol, onNavigateFile }: S
           <span>Symbols</span>
           <span className="atlas-count">{node.symbols.length}</span>
         </div>
+        <div
+          className={`atlas-semantic-status${semanticProvider?.available ? ' is-ready' : ' is-unavailable'}`}
+          title={semanticProvider?.reason}
+        >
+          {semanticProvider?.available ? <CircleCheck size={13} /> : <CircleSlash size={13} />}
+          <span>
+            <strong>{semanticProvider?.available ? 'LSP ready' : 'LSP unavailable'}</strong>
+            <small>{semanticProvider?.name ?? `${node.language ?? 'text'} · syntax only`}</small>
+          </span>
+        </div>
         <div className="atlas-symbol-list">
           {node.symbols.map((symbol: AtlasSymbol) => (
             <button
@@ -254,7 +285,7 @@ export function SourceView({ node, targetLine, targetSymbol, onNavigateFile }: S
               className={`atlas-symbol-list-item${referenceState?.symbol === symbol.name ? ' is-active' : ''}`}
               onClick={() => {
                 scrollToLine(symbol.line);
-                inspectSymbol(symbol.name);
+                inspectSymbol(symbol.name, symbol.line, symbol.column);
               }}
             >
               <span>{symbol.name}</span>
@@ -272,16 +303,38 @@ export function SourceView({ node, targetLine, targetSymbol, onNavigateFile }: S
             {referenceState.error && <div className="atlas-inspector-message">{referenceState.error}</div>}
             {referenceState.result && (
               <>
+                <div className={`atlas-reference-provider is-${referenceState.result.provider.status}`}>
+                  {referenceState.result.provider.status === 'ready' ? <CircleCheck size={13} /> : <CircleSlash size={13} />}
+                  <span>
+                    <strong>
+                      {referenceState.result.provider.kind === 'lsp' ? 'Semantic navigation' : 'Indexed declarations'}
+                    </strong>
+                    <small>{referenceState.result.provider.name}</small>
+                  </span>
+                  {referenceState.result.provider.message && <p>{referenceState.result.provider.message}</p>}
+                </div>
                 <ReferenceGroup
                   title="Definitions"
                   locations={referenceState.result.definitions}
-                  onNavigate={(location) => onNavigateFile({ path: location.filePath, line: location.line, symbol: referenceState.symbol })}
+                  onNavigate={(location) => onNavigateFile({
+                    path: location.filePath,
+                    line: location.line,
+                    column: location.column,
+                    symbol: referenceState.symbol,
+                  })}
                 />
-                <ReferenceGroup
-                  title="References"
-                  locations={referenceState.result.references}
-                  onNavigate={(location) => onNavigateFile({ path: location.filePath, line: location.line, symbol: referenceState.symbol })}
-                />
+                {(referenceState.result.provider.kind === 'lsp' || referenceState.result.references.length > 0) && (
+                  <ReferenceGroup
+                    title="References"
+                    locations={referenceState.result.references}
+                    onNavigate={(location) => onNavigateFile({
+                      path: location.filePath,
+                      line: location.line,
+                      column: location.column,
+                      symbol: referenceState.symbol,
+                    })}
+                  />
+                )}
                 {referenceState.result.definitions.length + referenceState.result.references.length === 0 && (
                   <div className="atlas-inspector-message">No indexed locations.</div>
                 )}

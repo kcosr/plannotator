@@ -99,22 +99,23 @@ describe("explore server", () => {
       expect(source.content).toContain("function greet");
 
       const referencesResponse = await fetch(
-        `${server.url}/api/atlas/references?symbol=greet`,
+        `${server.url}/api/atlas/references?symbol=greet&path=main.ts&line=1&column=17`,
       );
       expect(referencesResponse.status).toBe(200);
       const locations = await referencesResponse.json() as {
         definitions: Array<{ kind: string; filePath: string }>;
         references: Array<{ kind: string; filePath: string }>;
+        provider: { kind: string; status: string };
       };
       expect(locations.definitions).toHaveLength(1);
       expect(locations.definitions[0]).toMatchObject({
         kind: "definition",
         filePath: "main.ts",
       });
-      expect(locations.references).toHaveLength(1);
-      expect(locations.references[0]).toMatchObject({
-        kind: "reference",
-        filePath: "main.ts",
+      expect(locations.references).toHaveLength(0);
+      expect(locations.provider).toMatchObject({
+        kind: "syntax",
+        status: "unavailable",
       });
 
       const traversalResponse = await fetch(

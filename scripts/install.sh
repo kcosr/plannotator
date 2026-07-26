@@ -4,6 +4,8 @@ set -e
 REPO="backnotprop/plannotator"
 SEM_REPO="Ataraxy-Labs/sem"
 SEM_VERSION="v0.8.0"
+AST_GREP_REPO="ast-grep/ast-grep"
+AST_GREP_VERSION="0.45.0"
 INSTALL_DIR="$HOME/.local/bin"
 
 # First plannotator release that carries SLSA build-provenance attestations.
@@ -41,11 +43,11 @@ MODEL_INVOCABLE_FLAG=""
 NON_INTERACTIVE=0
 RECONFIGURE=0
 # Binary-only mode. Installs just the plannotator binary (to $INSTALL_DIR) and
-# no persistent state elsewhere — no sem sidecar, no agent-terminal runtime, no
-# skills, hooks, slash commands, or per-agent config (Claude, Codex, OpenCode,
-# Gemini, Kiro). Set by --minimal (1) / --no-minimal (0); -1 = neither flag
-# given (fall through to the PLANNOTATOR_MINIMAL env var). Resolved after arg
-# parsing so a flag overrides the env var in either direction.
+# no persistent state elsewhere — no sem or ast-grep sidecars, no agent-terminal
+# runtime, no skills, hooks, slash commands, or per-agent config (Claude, Codex,
+# OpenCode, Gemini, Kiro). Set by --minimal (1) / --no-minimal (0); -1 = neither
+# flag given (fall through to the PLANNOTATOR_MINIMAL env var). Resolved after
+# arg parsing so a flag overrides the env var in either direction.
 MINIMAL_FLAG=-1
 
 usage() {
@@ -73,7 +75,8 @@ Options:
                          "none". Skills are user-invoked-only by default.
   --minimal              Install only the plannotator binary (aliased
                          --binary-only). Skips the sem semantic-diff sidecar,
-                         the agent-terminal runtime, and every per-agent
+                         the ast-grep code-intelligence sidecar, the agent-
+                         terminal runtime, and every per-agent
                          integration (skills, hooks, slash commands, and config
                          for Claude, Codex, OpenCode, Gemini, and Kiro). No
                          persistent state is written outside $HOME/.local/bin
@@ -104,6 +107,12 @@ The optional semantic-diff sidecar (the 'sem' binary, used by code review) is
 installed after Plannotator itself. Skip it by exporting
 PLANNOTATOR_SKIP_SEM_INSTALL=1. Its download is time-bounded, so a slow network
 never blocks an otherwise-complete install.
+
+The ast-grep sidecar (required by codebase Explore indexing) is installed after
+Plannotator itself from the pinned official ast-grep 0.45.0 release. Skip it by
+exporting PLANNOTATOR_SKIP_AST_GREP_INSTALL=1. Its download is time-bounded and
+installation failures are non-fatal to the rest of Plannotator; Explore reports
+the missing analyzer until ast-grep is installed or configured.
 
 The optional annotate agent terminal runtime is installed after Plannotator
 itself. Skip it by exporting PLANNOTATOR_SKIP_AGENT_TERMINAL_INSTALL=1. If
@@ -571,6 +580,129 @@ install_sem_sidecar() {
     echo "Semantic diff sidecar installed to ${sem_bin}"
 }
 
+ast_grep_release_for_platform() {
+    # SHA256 values are pinned from the GitHub release asset digest metadata.
+    case "$platform" in
+        darwin-arm64) echo "app-aarch64-apple-darwin.zip ec2e3680f4f84c68b48420bcca01d21389787c7318b52083dde6f46ac12ad946" ;;
+        darwin-x64)   echo "app-x86_64-apple-darwin.zip 78d0d9db2f4dfd964fd313e70e92571c6d4204243ad8f3d0abbb2ffc56e45fc6" ;;
+        linux-arm64)  echo "app-aarch64-unknown-linux-gnu.zip 62b60892dafacfa76d6de87157659f880bbf85ff38bdab52db12f1f14ec60f94" ;;
+        linux-x64)    echo "app-x86_64-unknown-linux-gnu.zip 78931ae35ebac33d9a72b3aecea3e3d62d6e5b0b718ac8bbedfbe69d68421e41" ;;
+        *)            return 1 ;;
+    esac
+}
+
+install_ast_grep_sidecar() {
+    case "${PLANNOTATOR_SKIP_AST_GREP_INSTALL:-}" in
+        1|true|yes|TRUE|YES|True|Yes)
+            echo "Skipping ast-grep sidecar install (PLANNOTATOR_SKIP_AST_GREP_INSTALL is set)"
+            return 0
+            ;;
+    esac
+
+    ast_grep_release="$(ast_grep_release_for_platform 2>/dev/null || true)"
+    if [ -z "$ast_grep_release" ]; then
+        echo "Skipping ast-grep sidecar install (ast-grep does not publish ${platform})"
+        return 0
+    fi
+    ast_grep_asset="${ast_grep_release%% *}"
+    expected_ast_grep_checksum="${ast_grep_release#* }"
+
+    ast_grep_dir="${_config_dir}/vendor/ast-grep/${AST_GREP_VERSION}"
+    ast_grep_bin="${ast_grep_dir}/ast-grep"
+    if [ -x "$ast_grep_bin" ] &&
+       [ "$("$ast_grep_bin" --version 2>/dev/null || true)" = "ast-grep ${AST_GREP_VERSION}" ]; then
+        echo "ast-grep sidecar already installed at ${ast_grep_bin}"
+        return 0
+    fi
+
+    tmp_ast_grep_dir="$(mktemp -d 2>/dev/null || true)"
+    if [ -z "$tmp_ast_grep_dir" ]; then
+        echo "Skipping ast-grep sidecar install (temporary directory creation failed)"
+        return 0
+    fi
+    ast_grep_archive="${tmp_ast_grep_dir}/${ast_grep_asset}"
+    ast_grep_extract="${tmp_ast_grep_dir}/extract"
+    ast_grep_url="https://github.com/${AST_GREP_REPO}/releases/download/${AST_GREP_VERSION}/${ast_grep_asset}"
+
+    if ! curl -fsSL --connect-timeout 10 --max-time 120 -o "$ast_grep_archive" "$ast_grep_url"; then
+        echo "Skipping ast-grep sidecar install (download failed; Explore indexing requires ast-grep)"
+        rm -rf "$tmp_ast_grep_dir"
+        return 0
+    fi
+
+    if command -v sha256sum >/dev/null 2>&1; then
+        actual_ast_grep_checksum="$(sha256sum "$ast_grep_archive" 2>/dev/null | cut -d' ' -f1 || true)"
+    elif command -v shasum >/dev/null 2>&1; then
+        actual_ast_grep_checksum="$(shasum -a 256 "$ast_grep_archive" 2>/dev/null | cut -d' ' -f1 || true)"
+    else
+        actual_ast_grep_checksum=""
+    fi
+    if [ -z "$actual_ast_grep_checksum" ]; then
+        echo "Skipping ast-grep sidecar install (no working SHA256 verifier)"
+        rm -rf "$tmp_ast_grep_dir"
+        return 0
+    elif [ "$actual_ast_grep_checksum" != "$expected_ast_grep_checksum" ]; then
+        echo "Skipping ast-grep sidecar install (pinned checksum mismatch; archive was not installed)"
+        rm -rf "$tmp_ast_grep_dir"
+        return 0
+    fi
+
+    if ! mkdir -p "$ast_grep_extract"; then
+        echo "Skipping ast-grep sidecar install (extraction directory creation failed)"
+        rm -rf "$tmp_ast_grep_dir"
+        return 0
+    fi
+    ast_grep_extract_failed=0
+    if command -v unzip >/dev/null 2>&1; then
+        unzip -q "$ast_grep_archive" -d "$ast_grep_extract" || ast_grep_extract_failed=1
+    elif command -v python3 >/dev/null 2>&1; then
+        python3 -m zipfile -e "$ast_grep_archive" "$ast_grep_extract" || ast_grep_extract_failed=1
+    elif command -v python >/dev/null 2>&1; then
+        python -m zipfile -e "$ast_grep_archive" "$ast_grep_extract" || ast_grep_extract_failed=1
+    else
+        ast_grep_extract_failed=1
+    fi
+    if [ "${ast_grep_extract_failed:-0}" -ne 0 ]; then
+        echo "Skipping ast-grep sidecar install (no working ZIP extractor; Explore indexing requires ast-grep)"
+        rm -rf "$tmp_ast_grep_dir"
+        return 0
+    fi
+
+    extracted_ast_grep="$(find "$ast_grep_extract" -type f -name ast-grep -print -quit 2>/dev/null || true)"
+    if [ -z "$extracted_ast_grep" ]; then
+        echo "Skipping ast-grep sidecar install (binary missing from verified archive)"
+        rm -rf "$tmp_ast_grep_dir"
+        return 0
+    fi
+
+    if ! mkdir -p "$ast_grep_dir"; then
+        echo "Skipping ast-grep sidecar install (directory creation failed)"
+        rm -rf "$tmp_ast_grep_dir"
+        return 0
+    fi
+    staged_ast_grep="${ast_grep_dir}/.ast-grep.$$"
+    if ! cp "$extracted_ast_grep" "$staged_ast_grep" || ! chmod +x "$staged_ast_grep"; then
+        echo "Skipping ast-grep sidecar install (staging failed)"
+        rm -f "$staged_ast_grep"
+        rm -rf "$tmp_ast_grep_dir"
+        return 0
+    fi
+    if [ "$("$staged_ast_grep" --version 2>/dev/null || true)" != "ast-grep ${AST_GREP_VERSION}" ]; then
+        echo "Skipping ast-grep sidecar install (verified archive contained an unexpected binary version)"
+        rm -f "$staged_ast_grep"
+        rm -rf "$tmp_ast_grep_dir"
+        return 0
+    fi
+    if ! mv -f "$staged_ast_grep" "$ast_grep_bin"; then
+        echo "Skipping ast-grep sidecar install (atomic install failed)"
+        rm -f "$staged_ast_grep"
+        rm -rf "$tmp_ast_grep_dir"
+        return 0
+    fi
+    rm -rf "$tmp_ast_grep_dir"
+    echo "ast-grep sidecar installed to ${ast_grep_bin}"
+}
+
 install_agent_terminal_runtime() {
     case "${PLANNOTATOR_SKIP_AGENT_TERMINAL_INSTALL:-}" in
         1|true|yes|TRUE|YES|True|Yes)
@@ -585,6 +717,7 @@ install_agent_terminal_runtime() {
 }
 
 install_sem_sidecar
+install_ast_grep_sidecar
 install_agent_terminal_runtime
 
 print_path_advice

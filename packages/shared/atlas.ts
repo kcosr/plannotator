@@ -2,6 +2,13 @@ import { execFile } from "node:child_process";
 import { lstat, readdir, readFile, realpath, stat } from "node:fs/promises";
 import { basename, dirname, extname, join, posix, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
+import {
+	analyzeAtlasStructure,
+	type AtlasStructuralAnalyzer,
+	type StructuralFileOutline,
+	type StructuralItem,
+	type StructuralMember,
+} from "./atlas-structure";
 
 const execFileAsync = promisify(execFile);
 
@@ -26,6 +33,7 @@ export interface AtlasSymbol {
 	name: string;
 	kind: AtlasSymbolKind;
 	line: number;
+	column: number;
 	endLine: number;
 	exported: boolean;
 	complexity: number;
@@ -73,7 +81,7 @@ export interface AtlasSummary {
 }
 
 export interface AtlasSnapshot {
-	version: 1;
+	version: 2;
 	rootPath: string;
 	rootName: string;
 	rootId: string;
@@ -81,12 +89,28 @@ export interface AtlasSnapshot {
 	nodes: AtlasNode[];
 	dependencies: AtlasDependency[];
 	summary: AtlasSummary;
+	analyzers: {
+		structural: AtlasStructuralAnalyzer;
+		semantic: {
+			protocol: "lsp";
+			providers: AtlasSemanticProviderCapability[];
+		};
+	};
 }
 
 export interface BuildAtlasOptions {
 	maxFiles?: number;
 	maxFileBytes?: number;
 	maxTotalBytes?: number;
+	semanticProviders?: AtlasSemanticProviderCapability[];
+}
+
+export interface AtlasSemanticProviderCapability {
+	language: string;
+	name: string;
+	available: boolean;
+	source?: string;
+	reason?: string;
 }
 
 type LanguageDefinition = {
@@ -106,6 +130,12 @@ type FileAnalysis = {
 	complexity: number;
 	symbols: Omit<AtlasSymbol, "id" | "fileId">[];
 	imports: ParsedImport[];
+};
+
+type AcceptedFile = {
+	path: string;
+	bytes: number;
+	content: string;
 };
 
 const DEFAULT_MAX_FILES = 20_000;
@@ -328,221 +358,203 @@ function approximateComplexity(content: string, language: string): number {
 	return 1 + (source.match(keywords)?.length ?? 0);
 }
 
-function lineAt(content: string, offset: number): number {
-	let line = 1;
-	for (let index = 0; index < offset; index += 1) {
-		if (content.charCodeAt(index) === 10) line += 1;
-	}
-	return line;
-}
-
-type SymbolPattern = {
-	regex: RegExp;
-	kind: AtlasSymbolKind | ((match: RegExpExecArray) => AtlasSymbolKind);
-	nameGroup: number;
-	exported?: (match: RegExpExecArray) => boolean;
-};
-
-function symbolPatterns(language: string): SymbolPattern[] {
-	switch (language) {
-		case "typescript":
-		case "javascript":
-			return [
-				{
-					regex: /^\s*(export\s+)?(?:default\s+)?(?:abstract\s+)?class\s+([A-Za-z_$][\w$]*)/gm,
-					kind: "class",
-					nameGroup: 2,
-					exported: (match) => Boolean(match[1]),
-				},
-				{
-					regex: /^\s*(export\s+)?interface\s+([A-Za-z_$][\w$]*)/gm,
-					kind: "interface",
-					nameGroup: 2,
-					exported: (match) => Boolean(match[1]),
-				},
-				{
-					regex: /^\s*(export\s+)?type\s+([A-Za-z_$][\w$]*)(?:\s*<[^>\n]+>)?\s*=/gm,
-					kind: "type",
-					nameGroup: 2,
-					exported: (match) => Boolean(match[1]),
-				},
-				{
-					regex: /^\s*(export\s+)?(?:const\s+)?enum\s+([A-Za-z_$][\w$]*)\s*\{/gm,
-					kind: "enum",
-					nameGroup: 2,
-					exported: (match) => Boolean(match[1]),
-				},
-				{
-					regex: /^\s*(export\s+)?(?:default\s+)?(?:async\s+)?function\s*\*?\s*([A-Za-z_$][\w$]*)/gm,
-					kind: "function",
-					nameGroup: 2,
-					exported: (match) => Boolean(match[1]),
-				},
-				{
-					regex: /^\s*(export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=]+)?=\s*(?:async\s*)?(?:\([^)]*\)|[A-Za-z_$][\w$]*)\s*=>/gm,
-					kind: "function",
-					nameGroup: 2,
-					exported: (match) => Boolean(match[1]),
-				},
-				{
-					regex: /^\s*(?:(?:public|private|protected|static|readonly|abstract|override|async|get|set)\s+)*([A-Za-z_$][\w$]*)\s*(?:<[^>{}]+>)?\s*\([^;{}]*\)\s*(?::[^={]+)?\{/gm,
-					kind: "method",
-					nameGroup: 1,
-				},
-				{
-					regex: /^\s*(export\s+)?(?:const|let|var)\s+([A-Za-z_$][\w$]*)\s*(?::[^=;]+)?(?:=|;)/gm,
-					kind: "variable",
-					nameGroup: 2,
-					exported: (match) => Boolean(match[1]),
-				},
-			];
-		case "python":
-			return [
-				{ regex: /^\s*class\s+([A-Za-z_]\w*)/gm, kind: "class", nameGroup: 1 },
-				{ regex: /^\s*(?:async\s+)?def\s+([A-Za-z_]\w*)/gm, kind: "function", nameGroup: 1 },
-				{ regex: /^([A-Za-z_]\w*)\s*(?::[^=]+)?=/gm, kind: "variable", nameGroup: 1 },
-			];
-		case "go":
-			return [
-				{ regex: /^\s*type\s+([A-Za-z_]\w*)\s+(struct|interface)\b/gm, kind: (match) => match[2] as "struct" | "interface", nameGroup: 1 },
-				{ regex: /^\s*func\s+(?:\([^)]*\)\s*)?([A-Za-z_]\w*)\s*\(/gm, kind: "function", nameGroup: 1 },
-				{ regex: /^\s*(?:var|const)\s+([A-Za-z_]\w*)\b/gm, kind: "variable", nameGroup: 1 },
-			];
-		case "rust":
-			return [
-				{ regex: /^\s*(?:pub(?:\([^)]*\))?\s+)?(?:async\s+)?fn\s+([A-Za-z_]\w*)/gm, kind: "function", nameGroup: 1, exported: (match) => /\bpub\b/.test(match[0]) },
-				{ regex: /^\s*(?:pub(?:\([^)]*\))?\s+)?(struct|enum|trait|type|mod)\s+([A-Za-z_]\w*)/gm, kind: (match) => match[1] === "mod" ? "module" : match[1] as AtlasSymbolKind, nameGroup: 2, exported: (match) => /\bpub\b/.test(match[0]) },
-				{ regex: /^\s*(?:pub(?:\([^)]*\))?\s+)?(?:const|static)\s+([A-Za-z_]\w*)\b/gm, kind: "variable", nameGroup: 1, exported: (match) => /\bpub\b/.test(match[0]) },
-			];
-		case "java":
-			return [
-				{ regex: /^\s*(?:public\s+)?(?:abstract\s+)?(class|interface|enum)\s+([A-Za-z_$][\w$]*)/gm, kind: (match) => match[1] as AtlasSymbolKind, nameGroup: 2, exported: (match) => /\bpublic\b/.test(match[0]) },
-				{ regex: /^\s*(?:public|protected|private|static|final|synchronized|abstract|native|\s)+[\w<>\[\],.?]+\s+([A-Za-z_$][\w$]*)\s*\([^;]*\)\s*(?:throws[^{]+)?\{/gm, kind: "method", nameGroup: 1, exported: (match) => /\bpublic\b/.test(match[0]) },
-			];
-		case "c":
-		case "cpp":
-			return [
-				{ regex: /^\s*(class|struct|enum)\s+([A-Za-z_]\w*)/gm, kind: (match) => match[1] as "class" | "struct" | "enum", nameGroup: 2 },
-				{ regex: /^\s*(?:[\w:*&<>,[\]\s]+)\s+([A-Za-z_]\w*)\s*\([^;{}]*\)\s*\{/gm, kind: "function", nameGroup: 1 },
-			];
-		case "ruby":
-			return [
-				{ regex: /^\s*class\s+([A-Z]\w*(?:::[A-Z]\w*)*)/gm, kind: "class", nameGroup: 1 },
-				{ regex: /^\s*module\s+([A-Z]\w*(?:::[A-Z]\w*)*)/gm, kind: "module", nameGroup: 1 },
-				{ regex: /^\s*def\s+(?:self\.)?([A-Za-z_]\w*[!?=]?)/gm, kind: "function", nameGroup: 1 },
-				{ regex: /^([A-Z]\w*)\s*=/gm, kind: "variable", nameGroup: 1 },
-			];
+function symbolKind(
+	symbolType: string,
+	astKind: string,
+	language: string,
+	member: boolean,
+): AtlasSymbolKind {
+	if (member && (symbolType === "method" || symbolType === "constructor")) return "method";
+	if (astKind.includes("type_alias")) return "type";
+	if (language === "rust" && astKind === "trait_item") return "trait";
+	if (language === "typescript" && symbolType === "struct") return "type";
+	switch (symbolType) {
+		case "class":
+		case "interface":
+		case "enum":
+		case "struct":
+		case "trait":
+		case "function":
+		case "method":
+		case "module":
+			return symbolType;
+		case "type":
+			return "type";
+		case "constant":
+		case "field":
+		case "variable":
+			return "variable";
 		default:
-			return [];
+			return "other";
 	}
 }
 
-function extractSymbols(content: string, language: string): FileAnalysis["symbols"] {
-	const symbols: FileAnalysis["symbols"] = [];
-	const seen = new Set<string>();
-	const reservedNames = new Set(["if", "for", "while", "switch", "catch", "match"]);
-	const source = stripComments(content, language);
-	for (const pattern of symbolPatterns(language)) {
-		pattern.regex.lastIndex = 0;
-		let match: RegExpExecArray | null;
-		while ((match = pattern.regex.exec(source)) !== null) {
-			const name = match[pattern.nameGroup];
-			if (!name || reservedNames.has(name)) continue;
-			const line = lineAt(content, match.index);
-			const kind = typeof pattern.kind === "function" ? pattern.kind(match) : pattern.kind;
-			const key = `${name}:${line}`;
-			if (seen.has(key)) continue;
-			seen.add(key);
-			symbols.push({
-				name,
-				kind,
-				line,
-				endLine: line,
-				exported: pattern.exported?.(match) ?? false,
-				complexity: 1,
-			});
-		}
+function normalizeImportName(name: string): string {
+	const trimmed = name.trim();
+	if (
+		(trimmed.startsWith('"') && trimmed.endsWith('"')) ||
+		(trimmed.startsWith("'") && trimmed.endsWith("'")) ||
+		(trimmed.startsWith("`") && trimmed.endsWith("`"))
+	) {
+		return trimmed.slice(1, -1);
 	}
-	const sorted = symbols.sort((a, b) => a.line - b.line || a.name.localeCompare(b.name));
-	const lines = content.split(/\r\n|\r|\n/);
-	return sorted.map((symbol, index) => {
-		const nextLine = sorted[index + 1]?.line;
-		const endLine = Math.max(symbol.line, nextLine ? nextLine - 1 : lines.length);
-		return {
-			...symbol,
-			endLine,
-			complexity: approximateComplexity(
-				lines.slice(symbol.line - 1, endLine).join("\n"),
-				language,
-			),
-		};
-	});
+	return trimmed;
 }
 
-function collectImports(content: string, language: string): ParsedImport[] {
-	const specifiers: string[] = [];
-	const source = stripComments(content, language);
-	const addMatches = (regex: RegExp, group = 1): void => {
-		regex.lastIndex = 0;
-		let match: RegExpExecArray | null;
-		while ((match = regex.exec(source)) !== null) {
-			const specifier = match[group]?.trim();
-			if (specifier) specifiers.push(specifier);
-		}
-	};
-
-	switch (language) {
-		case "typescript":
-		case "javascript":
-			addMatches(/\b(?:import|export)\s+(?:[\s\S]*?\s+from\s+)?["']([^"']+)["']/g);
-			addMatches(/\b(?:import|require)\s*\(\s*["']([^"']+)["']\s*\)/g);
-			break;
-		case "python":
-			addMatches(/^\s*from\s+([.\w]+)\s+import\b/gm);
-			addMatches(/^\s*import\s+([.\w]+)/gm);
-			break;
-		case "go":
-			addMatches(/^\s*import\s+(?:[._\w]+\s+)?["`]([^"`]+)["`]/gm);
-			for (const block of source.matchAll(/\bimport\s*\(([\s\S]*?)\)/g)) {
-				for (const entry of block[1]?.matchAll(/(?:^|\n)\s*(?:[._\w]+\s+)?["`]([^"`]+)["`]/gm) ?? []) {
-					if (entry[1]) specifiers.push(entry[1]);
-				}
-			}
-			break;
-		case "rust":
-			addMatches(/^\s*(?:pub\s+)?mod\s+([A-Za-z_]\w*)\s*;/gm);
-			addMatches(/^\s*use\s+((?:crate|self|super)::[\w:]+)/gm);
-			break;
-		case "java":
-			addMatches(/^\s*import\s+(?:static\s+)?([\w.]+)(?:\.\*)?\s*;/gm);
-			break;
-		case "c":
-		case "cpp":
-			addMatches(/^\s*#\s*include\s*"([^"]+)"/gm);
-			break;
-		case "ruby":
-			addMatches(/^\s*require_relative\s+["']([^"']+)["']/gm);
-			addMatches(/^\s*require\s+["']([^"']+)["']/gm);
-			break;
-	}
-
-	const counts = new Map<string, number>();
-	for (const specifier of specifiers) {
-		counts.set(specifier, (counts.get(specifier) ?? 0) + 1);
-	}
-	return [...counts].map(([specifier, count]) => ({ specifier, count }));
-}
-
-function analyzeFile(filePath: string, content: string): FileAnalysis | null {
+function analyzeOutline(
+	filePath: string,
+	content: string,
+	outline: StructuralFileOutline | undefined,
+): FileAnalysis | null {
 	const identified = languageForPath(filePath);
 	if (!identified) return null;
+	const lines = content.split(/\r\n|\r|\n/);
+	const symbols: FileAnalysis["symbols"] = [];
+	const imports = new Map<string, number>();
+
+	const symbolPosition = (
+		entry: StructuralItem | StructuralMember,
+		name: string,
+	): { line: number; column: number } => {
+		const startLine = entry.range.start.line;
+		const endLine = Math.min(entry.range.end.line, startLine + 20);
+		for (let lineIndex = startLine; lineIndex <= endLine; lineIndex += 1) {
+			const sourceLine = lines[lineIndex] ?? "";
+			let offset = sourceLine.indexOf(name);
+			while (offset >= 0) {
+				const before = sourceLine[offset - 1] ?? "";
+				const after = sourceLine[offset + name.length] ?? "";
+				if (!/[\p{L}\p{N}_$]/u.test(before) && !/[\p{L}\p{N}_$]/u.test(after)) {
+					return { line: lineIndex + 1, column: offset + 1 };
+				}
+				offset = sourceLine.indexOf(name, offset + 1);
+			}
+		}
+		return {
+			line: entry.range.start.line + 1,
+			column: entry.range.start.column + 1,
+		};
+	};
+
+	const addSymbol = (
+		entry: StructuralItem | StructuralMember,
+		exported: boolean,
+		member: boolean,
+	): void => {
+		const name = entry.name.trim();
+		if (!name) return;
+		const position = symbolPosition(entry, name);
+		const line = position.line;
+		const endLine = Math.max(line, entry.range.end.line + 1);
+		symbols.push({
+			name,
+			kind: symbolKind(entry.symbolType, entry.astKind, identified.language, member),
+			line,
+			column: position.column,
+			endLine,
+			exported,
+			complexity: approximateComplexity(
+				lines.slice(line - 1, endLine).join("\n"),
+				identified.language,
+			),
+		});
+	};
+
+	for (const item of outline?.items ?? []) {
+		if (item.isImport) {
+			const specifier = normalizeImportName(item.name);
+			if (specifier) imports.set(specifier, (imports.get(specifier) ?? 0) + 1);
+			continue;
+		}
+		if (identified.language === "rust" && item.astKind === "mod_item") {
+			const specifier = normalizeImportName(item.name);
+			if (specifier) imports.set(specifier, (imports.get(specifier) ?? 0) + 1);
+		}
+		addSymbol(item, item.isExported, false);
+		for (const member of item.members ?? []) {
+			addSymbol(member, item.isExported && member.isPublic !== false, true);
+		}
+	}
+
+	symbols.sort((a, b) => a.line - b.line || a.column - b.column || a.name.localeCompare(b.name));
 	return {
 		...identified,
 		lines: countLines(content),
 		complexity: approximateComplexity(content, identified.language),
-		symbols: extractSymbols(content, identified.language),
-		imports: collectImports(content, identified.language),
+		symbols,
+		imports: [...imports].map(([specifier, count]) => ({ specifier, count })),
 	};
+}
+
+function rustCrateRoot(sourcePath: string): string {
+	const segments = sourcePath.split("/");
+	const sourceIndex = segments.lastIndexOf("src");
+	return sourceIndex >= 0 ? segments.slice(0, sourceIndex + 1).join("/") : posix.dirname(sourcePath);
+}
+
+function rustCrateEntry(root: string, fileIdsByPath: Map<string, string>): string | null {
+	for (const name of ["lib.rs", "main.rs", "mod.rs"]) {
+		const candidate = posix.join(root, name);
+		if (fileIdsByPath.has(candidate)) return candidate;
+	}
+	return null;
+}
+
+function resolveRustDependency(
+	sourcePath: string,
+	specifier: string,
+	fileIdsByPath: Map<string, string>,
+): { targetId: string; targetPath: string } | null {
+	const sourceDirectory = posix.dirname(sourcePath);
+	const sourceRoot = rustCrateRoot(sourcePath);
+	const rawParts = specifier
+		.replace(/\{[\s\S]*$/, "")
+		.split("::")
+		.map((part) => part.trim())
+		.filter((part) => part && part !== "*");
+	let base = sourceDirectory;
+
+	if (rawParts[0] === "crate") {
+		rawParts.shift();
+		base = sourceRoot;
+	} else if (rawParts[0] === "self") {
+		rawParts.shift();
+	} else if (rawParts[0] === "super") {
+		let levels = 0;
+		while (rawParts[0] === "super") {
+			rawParts.shift();
+			levels += 1;
+		}
+		base = sourceDirectory;
+		for (let index = 1; index < levels; index += 1) base = posix.dirname(base);
+		if (rawParts.length === 0) {
+			const entry = rustCrateEntry(base, fileIdsByPath);
+			if (entry) return { targetId: fileIdsByPath.get(entry)!, targetPath: entry };
+		}
+	} else if (rawParts.length > 0) {
+		const crateName = rawParts[0]!.replaceAll("-", "_");
+		const crateEntry = [...fileIdsByPath.keys()].find((candidate) => {
+			if (!candidate.endsWith("/src/lib.rs")) return false;
+			const crateDirectory = candidate.slice(0, -"/src/lib.rs".length).split("/").at(-1);
+			return crateDirectory?.replaceAll("-", "_") === crateName;
+		});
+		if (crateEntry) {
+			rawParts.shift();
+			if (rawParts.length === 0) {
+				return { targetId: fileIdsByPath.get(crateEntry)!, targetPath: crateEntry };
+			}
+			base = posix.dirname(crateEntry);
+		}
+	}
+
+	for (let length = rawParts.length; length > 0; length -= 1) {
+		const modulePath = posix.join(base, ...rawParts.slice(0, length));
+		for (const candidate of [`${modulePath}.rs`, posix.join(modulePath, "mod.rs")]) {
+			const targetId = fileIdsByPath.get(candidate);
+			if (targetId) return { targetId, targetPath: candidate };
+		}
+	}
+	return null;
 }
 
 function buildResolutionCandidates(sourcePath: string, specifier: string, language: string): string[] {
@@ -600,6 +612,10 @@ function resolveDependencyTarget(
 	language: string,
 	fileIdsByPath: Map<string, string>,
 ): { targetId: string; targetPath: string } | null {
+	if (language === "rust") {
+		const target = resolveRustDependency(sourcePath, specifier, fileIdsByPath);
+		if (target) return target;
+	}
 	for (const candidate of buildResolutionCandidates(sourcePath, specifier, language)) {
 		const targetId = fileIdsByPath.get(candidate);
 		if (targetId) return { targetId, targetPath: candidate };
@@ -712,6 +728,7 @@ export async function buildAtlasSnapshot(
 	const nodesById = new Map<string, AtlasNode>([[rootNode.id, rootNode]]);
 	const importsByFile = new Map<string, ParsedImport[]>();
 	const languageByFile = new Map<string, string>();
+	const acceptedFiles: AcceptedFile[] = [];
 	let skippedFiles = 0;
 	let totalReadBytes = 0;
 	let truncated = truncatedByFileCount;
@@ -763,14 +780,27 @@ export async function buildAtlasSnapshot(
 			skippedFiles += 1;
 			continue;
 		}
-		const analysis = analyzeFile(normalizedPath, content);
+		acceptedFiles.push({ path: normalizedPath, bytes: bytes.length, content });
+	}
+
+	const structure = await analyzeAtlasStructure(
+		resolvedRoot,
+		acceptedFiles.map((file) => file.path),
+	);
+
+	for (const accepted of acceptedFiles) {
+		const analysis = analyzeOutline(
+			accepted.path,
+			accepted.content,
+			structure.files.get(accepted.path),
+		);
 		if (!analysis) {
 			skippedFiles += 1;
 			continue;
 		}
 
-		const id = nodeId("file", normalizedPath);
-		const parentId = ensureDirectoryNodes(normalizedPath, rootNode, nodesById);
+		const id = nodeId("file", accepted.path);
+		const parentId = ensureDirectoryNodes(accepted.path, rootNode, nodesById);
 		const symbols: AtlasSymbol[] = analysis.symbols.map((symbol) => ({
 			...symbol,
 			id: symbolId(id, symbol.kind, symbol.name, symbol.line),
@@ -778,23 +808,23 @@ export async function buildAtlasSnapshot(
 		}));
 		const fileNode: AtlasNode = {
 			id,
-			path: normalizedPath,
-			name: posix.basename(normalizedPath),
+			path: accepted.path,
+			name: posix.basename(accepted.path),
 			parentId,
 			childIds: [],
 			kind: "file",
-			depth: normalizedPath.split("/").length,
+			depth: accepted.path.split("/").length,
 			language: analysis.language,
 			extension: analysis.extension,
-			bytes: bytes.length,
+			bytes: accepted.bytes,
 			lines: analysis.lines,
 			complexity: analysis.complexity,
 			symbols,
 		};
 		nodesById.set(id, fileNode);
 		nodesById.get(parentId)!.childIds.push(id);
-		importsByFile.set(normalizedPath, analysis.imports);
-		languageByFile.set(normalizedPath, analysis.language);
+		importsByFile.set(accepted.path, analysis.imports);
+		languageByFile.set(accepted.path, analysis.language);
 	}
 
 	aggregateDirectoryMetrics(nodesById);
@@ -848,13 +878,20 @@ export async function buildAtlasSnapshot(
 	}
 
 	return {
-		version: 1,
+		version: 2,
 		rootPath: resolvedRoot,
 		rootName: rootNode.name,
 		rootId: rootNode.id,
 		generatedAt: new Date().toISOString(),
 		nodes,
 		dependencies,
+		analyzers: {
+			structural: structure.analyzer,
+			semantic: {
+				protocol: "lsp",
+				providers: options.semanticProviders ?? [],
+			},
+		},
 		summary: {
 			files: files.length,
 			directories: nodes.filter((node) => node.kind === "directory").length,
@@ -872,13 +909,16 @@ export async function buildAtlasSnapshot(
 }
 
 export {
-	findAtlasReferences,
+	findAtlasDeclarations,
 	readAtlasSource,
+	resolveAtlasReferences,
 	resolveAtlasSourcePath,
 	validateAtlasRelativePath,
 } from "./atlas-source";
 export type {
 	AtlasReference,
+	AtlasReferenceProvider,
+	AtlasReferenceResponse,
 	AtlasSourceFile,
 	SearchAtlasReferencesOptions,
 } from "./atlas-source";

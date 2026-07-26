@@ -6,6 +6,7 @@
       "name": "plannotator",
       "dependencies": {
         "@anthropic-ai/claude-agent-sdk": "^0.2.92",
+        "@ast-grep/cli": "0.45.0",
         "@opencode-ai/sdk": "^1.3.0",
         "@pierre/diffs": "1.2.8",
         "diff": "^8.0.4",
@@ -13,6 +14,7 @@
         "dompurify": "^3.3.3",
         "marked": "^17.0.6",
         "sonner": "^2.0.7",
+        "vscode-jsonrpc": "8.2.1",
       },
       "devDependencies": {
         "@types/node": "^25.5.2",
@@ -87,7 +89,7 @@
     },
     "apps/opencode-plugin": {
       "name": "@plannotator/opencode",
-      "version": "0.24.1",
+      "version": "0.24.2",
       "dependencies": {
         "@opencode-ai/plugin": "^1.1.10",
       },
@@ -109,8 +111,9 @@
     },
     "apps/pi-extension": {
       "name": "@plannotator/pi-extension",
-      "version": "0.24.1",
+      "version": "0.24.2",
       "dependencies": {
+        "@ast-grep/cli": "0.45.0",
         "@joplin/turndown-plugin-gfm": "^1.0.64",
         "@pierre/diffs": "1.2.8",
         "@plannotator/webtui": "0.1.0",
@@ -118,6 +121,7 @@
         "diff": "^8.0.4",
         "parse5": "^7.3.0",
         "turndown": "^7.2.4",
+        "vscode-jsonrpc": "8.2.1",
       },
       "devDependencies": {
         "@earendil-works/pi-agent-core": ">=0.74.0",
@@ -172,7 +176,7 @@
     },
     "apps/vscode-extension": {
       "name": "plannotator-webview",
-      "version": "0.16.7",
+      "version": "0.16.8",
       "devDependencies": {
         "@types/bun": "latest",
         "@types/vscode": "^1.85.0",
@@ -266,7 +270,7 @@
     },
     "packages/server": {
       "name": "@plannotator/server",
-      "version": "0.24.1",
+      "version": "0.24.2",
       "dependencies": {
         "@pierre/diffs": "1.2.8",
         "@plannotator/ai": "workspace:*",
@@ -375,6 +379,22 @@
     "@anthropic-ai/claude-agent-sdk-win32-x64": ["@anthropic-ai/claude-agent-sdk-win32-x64@0.2.141", "", { "os": "win32", "cpu": "x64" }, "sha512-IXuP29YJuWbR5Q6xOHrjFVGG54V2s1FC61UVNwEN5fpxL09MwPnbwtQL6fqgzt/U1MP7vWAwpXZriYAklkH/mg=="],
 
     "@anthropic-ai/sdk": ["@anthropic-ai/sdk@0.93.0", "", { "dependencies": { "json-schema-to-ts": "^3.1.1" }, "peerDependencies": { "zod": "^3.25.0 || ^4.0.0" }, "optionalPeers": ["zod"], "bin": { "anthropic-ai-sdk": "bin/cli" } }, "sha512-q9vaSZQVFx6B/gPxetGYfLXSJD5v0sOmh0OpZDq7yCrTSA+Rscvrtyol7JJTW40wEpQB4U1B4JXzxQitbQ3CAA=="],
+
+    "@ast-grep/cli": ["@ast-grep/cli@0.45.0", "", { "dependencies": { "detect-libc": "2.1.2" }, "optionalDependencies": { "@ast-grep/cli-darwin-arm64": "0.45.0", "@ast-grep/cli-darwin-x64": "0.45.0", "@ast-grep/cli-linux-arm64-gnu": "0.45.0", "@ast-grep/cli-linux-x64-gnu": "0.45.0", "@ast-grep/cli-win32-arm64-msvc": "0.45.0", "@ast-grep/cli-win32-ia32-msvc": "0.45.0", "@ast-grep/cli-win32-x64-msvc": "0.45.0" }, "bin": { "sg": "sg", "ast-grep": "ast-grep" } }, "sha512-OQ4pcktMtg1hcQat/iCpX9r8HJ7mU/2SZVoGHA9id2gEfosvDw5m5RINQXsSRZXQW8bl45FW6FhdK0O2FiKjsw=="],
+
+    "@ast-grep/cli-darwin-arm64": ["@ast-grep/cli-darwin-arm64@0.45.0", "", { "os": "darwin", "cpu": "arm64" }, "sha512-/GqKTawC6/g9k+NDr0u3PvJ0LJkmY5NH4GfvwrgmB8HjRVOoUXWQx5vVzZoEVrAcTogfNWEMs4I5Gdh+glQvPw=="],
+
+    "@ast-grep/cli-darwin-x64": ["@ast-grep/cli-darwin-x64@0.45.0", "", { "os": "darwin", "cpu": "x64" }, "sha512-SvcLPpOX2HaPepwuuSzTRdnrlcaVprQGdwuoW00+KWRjGZJj5z0WGIY84wjfTYhzUxaN5+z4GlCwLGgn0ojMzw=="],
+
+    "@ast-grep/cli-linux-arm64-gnu": ["@ast-grep/cli-linux-arm64-gnu@0.45.0", "", { "os": "linux", "cpu": "arm64" }, "sha512-N0vVTmASn/YR76BoY1zrIltLJ+PJ/zOv2aszX51Wym1ZA6P75tUPctofXh6KzEpESMdx2DcIDyDWVRi672SaQQ=="],
+
+    "@ast-grep/cli-linux-x64-gnu": ["@ast-grep/cli-linux-x64-gnu@0.45.0", "", { "os": "linux", "cpu": "x64" }, "sha512-rAMZJzAiBuXMViuJgdPeMZXI9HnqwMCh3ybIoj8dfWBPsAywKgU8vyH4kd/R5fFr/oB4lKVhTJ2/mEBsOQTHaQ=="],
+
+    "@ast-grep/cli-win32-arm64-msvc": ["@ast-grep/cli-win32-arm64-msvc@0.45.0", "", { "os": "win32", "cpu": "arm64" }, "sha512-9RMvGHSE7uMGzlrQ296caPUkF5jX3KcWewyUJLqpxtEQVwZUkJ7R2/rSxBhjZeg7dp1+keIgt/vH/7FyIO5Wwg=="],
+
+    "@ast-grep/cli-win32-ia32-msvc": ["@ast-grep/cli-win32-ia32-msvc@0.45.0", "", { "os": "win32", "cpu": "ia32" }, "sha512-jkQtIpWYJcorhfoRh99cMyeK+edAaysF2z2MR3bRdCDE8EcNfWfqGuWDcLInXwFWFX739dQ6rq9ev3e9o+owXA=="],
+
+    "@ast-grep/cli-win32-x64-msvc": ["@ast-grep/cli-win32-x64-msvc@0.45.0", "", { "os": "win32", "cpu": "x64" }, "sha512-2okmFrV/NP1qBATV21+pFIFiUlh5QbKNzTjCTyuaOhCzt0TwYao/RF5b2VUfsvBMtLqYj4rz69GvcPikznskfg=="],
 
     "@astrojs/compiler": ["@astrojs/compiler@2.13.1", "", {}, "sha512-f3FN83d2G/v32ipNClRKgYv30onQlMZX1vCeZMjPsMMPl1mDpmbl0+N5BYo4S/ofzqJyS5hvwacEo0CCVDn/Qg=="],
 
@@ -2581,6 +2601,8 @@
     "vite-plugin-singlefile": ["vite-plugin-singlefile@2.3.3", "", { "dependencies": { "micromatch": "^4.0.8" }, "peerDependencies": { "rollup": "^4.59.0", "vite": "^5.4.21 || ^6.0.0 || ^7.0.0 || ^8.0.0" }, "optionalPeers": ["rollup"] }, "sha512-XVnGH0QzbOa8fxRSsHdCarVN1BSBXNi7uLMQYlrGRN5apdHkk62XQWRJhVever0lnfuyBkwn+kvVChdm/OoOUg=="],
 
     "vitefu": ["vitefu@1.1.3", "", { "peerDependencies": { "vite": "^3.0.0 || ^4.0.0 || ^5.0.0 || ^6.0.0 || ^7.0.0 || ^8.0.0" }, "optionalPeers": ["vite"] }, "sha512-ub4okH7Z5KLjb6hDyjqrGXqWtWvoYdU3IGm/NorpgHncKoLTCfRIbvlhBm7r0YstIaQRYlp4yEbFqDcKSzXSSg=="],
+
+    "vscode-jsonrpc": ["vscode-jsonrpc@8.2.1", "", {}, "sha512-kdjOSJ2lLIn7r1rtrMbbNCHjyMPfRnowdKjBQ+mGq6NAW5QY2bEZC/khaC5OR8svbbjvLEaIXkOq45e2X9BIbQ=="],
 
     "w3c-keyname": ["w3c-keyname@2.2.8", "", {}, "sha512-dpojBhNsCNN7T82Tm7k26A6G9ML3NkhDsnw9n/eoxSRlVBB4CEtIQ/KTCLI2Fwf3ataSXRhYFkQi3SlnFwPvPQ=="],
 

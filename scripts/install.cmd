@@ -165,6 +165,8 @@ if "!MINIMAL_FLAG!"=="0" set "MINIMAL=0"
 set "REPO=backnotprop/plannotator"
 set "SEM_REPO=Ataraxy-Labs/sem"
 set "SEM_VERSION=v0.8.0"
+set "AST_GREP_REPO=ast-grep/ast-grep"
+set "AST_GREP_VERSION=0.45.0"
 set "INSTALL_DIR=%USERPROFILE%\.local\bin"
 
 REM First plannotator release that carries SLSA build-provenance attestations.
@@ -453,6 +455,7 @@ if "!MINIMAL!"=="1" (
 )
 
 call :InstallSemSidecar
+call :InstallAstGrepSidecar
 call :InstallAgentTerminalRuntime
 
 call :PrintPathAdvice
@@ -1157,6 +1160,112 @@ if !ERRORLEVEL! equ 0 (
 if exist "!SEM_ARCHIVE!" del "!SEM_ARCHIVE!"
 if exist "!SEM_CHECKSUMS!" del "!SEM_CHECKSUMS!"
 if exist "!SEM_EXTRACT!" rmdir /s /q "!SEM_EXTRACT!"
+goto :eof
+
+REM ======================================================================
+REM Optional ast-grep code-intelligence sidecar install. Non-fatal: Explore
+REM Explore indexing reports the missing analyzer if installation fails.
+REM ======================================================================
+:InstallAstGrepSidecar
+if /i "!PLANNOTATOR_SKIP_AST_GREP_INSTALL!"=="1" (
+    echo Skipping ast-grep sidecar install ^(PLANNOTATOR_SKIP_AST_GREP_INSTALL is set^)
+    goto :eof
+)
+if /i "!PLANNOTATOR_SKIP_AST_GREP_INSTALL!"=="true" (
+    echo Skipping ast-grep sidecar install ^(PLANNOTATOR_SKIP_AST_GREP_INSTALL is set^)
+    goto :eof
+)
+if /i "!PLANNOTATOR_SKIP_AST_GREP_INSTALL!"=="yes" (
+    echo Skipping ast-grep sidecar install ^(PLANNOTATOR_SKIP_AST_GREP_INSTALL is set^)
+    goto :eof
+)
+
+set "AST_GREP_ASSET="
+set "EXPECTED_AST_GREP_CHECKSUM="
+REM SHA256 values are pinned from the GitHub release asset digest metadata.
+if /i "!PLATFORM!"=="win32-x64" (
+    set "AST_GREP_ASSET=app-x86_64-pc-windows-msvc.zip"
+    set "EXPECTED_AST_GREP_CHECKSUM=a1b5b7c06994992755d4cd0b9cf10c2f4a6e7b4a82d2810edee5985a59f67ac5"
+)
+if /i "!PLATFORM!"=="win32-arm64" (
+    set "AST_GREP_ASSET=app-aarch64-pc-windows-msvc.zip"
+    set "EXPECTED_AST_GREP_CHECKSUM=0c0ec11916d77002ddff86f3f43cabd03d2d63189d54a1aedc5141592e7ac23d"
+)
+if not defined AST_GREP_ASSET (
+    echo Skipping ast-grep sidecar install ^(ast-grep does not publish !PLATFORM!^)
+    goto :eof
+)
+
+set "AST_GREP_DIR=!_CONFIG_DIR!\vendor\ast-grep\!AST_GREP_VERSION!"
+set "AST_GREP_PATH=!AST_GREP_DIR!\ast-grep.exe"
+if exist "!AST_GREP_PATH!" (
+    "!AST_GREP_PATH!" --version 2>nul | findstr /x /c:"ast-grep !AST_GREP_VERSION!" >nul 2>&1
+    if !ERRORLEVEL! equ 0 (
+        echo ast-grep sidecar already installed at !AST_GREP_PATH!
+        goto :eof
+    )
+)
+
+set "AST_GREP_URL=https://github.com/!AST_GREP_REPO!/releases/download/!AST_GREP_VERSION!/!AST_GREP_ASSET!"
+set "AST_GREP_ARCHIVE=%TEMP%\plannotator-ast-grep-%RANDOM%.zip"
+set "AST_GREP_EXTRACT=%TEMP%\plannotator-ast-grep-%RANDOM%"
+set "AST_GREP_STAGED=!AST_GREP_DIR!\.ast-grep-%RANDOM%.exe"
+mkdir "!AST_GREP_EXTRACT!" >nul 2>&1
+
+curl -fsSL --connect-timeout 10 --max-time 120 "!AST_GREP_URL!" -o "!AST_GREP_ARCHIVE!"
+if !ERRORLEVEL! neq 0 (
+    echo Skipping ast-grep sidecar install ^(download failed; Explore indexing requires ast-grep^)
+    goto :ast_grep_cleanup
+)
+
+set "ACTUAL_AST_GREP_CHECKSUM="
+for /f "skip=1 tokens=*" %%i in ('certutil -hashfile "!AST_GREP_ARCHIVE!" SHA256') do (
+    if not defined ACTUAL_AST_GREP_CHECKSUM (
+        set "ACTUAL_AST_GREP_CHECKSUM=%%i"
+        set "ACTUAL_AST_GREP_CHECKSUM=!ACTUAL_AST_GREP_CHECKSUM: =!"
+    )
+)
+if /i "!ACTUAL_AST_GREP_CHECKSUM!" neq "!EXPECTED_AST_GREP_CHECKSUM!" (
+    echo Skipping ast-grep sidecar install ^(pinned checksum mismatch; archive was not installed^)
+    goto :ast_grep_cleanup
+)
+
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Expand-Archive -Force -Path $env:AST_GREP_ARCHIVE -DestinationPath $env:AST_GREP_EXTRACT"
+if !ERRORLEVEL! neq 0 (
+    echo Skipping ast-grep sidecar install ^(extract failed; Explore indexing requires ast-grep^)
+    goto :ast_grep_cleanup
+)
+set "EXTRACTED_AST_GREP="
+for /f "usebackq delims=" %%i in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-ChildItem -Path $env:AST_GREP_EXTRACT -Filter ast-grep.exe -Recurse -File | Select-Object -First 1 -ExpandProperty FullName"`) do (
+    set "EXTRACTED_AST_GREP=%%i"
+)
+if not defined EXTRACTED_AST_GREP (
+    echo Skipping ast-grep sidecar install ^(binary missing from verified archive^)
+    goto :ast_grep_cleanup
+)
+
+if not exist "!AST_GREP_DIR!" mkdir "!AST_GREP_DIR!"
+copy /y "!EXTRACTED_AST_GREP!" "!AST_GREP_STAGED!" >nul
+if !ERRORLEVEL! neq 0 (
+    echo Skipping ast-grep sidecar install ^(staging failed^)
+    goto :ast_grep_cleanup
+)
+"!AST_GREP_STAGED!" --version 2>nul | findstr /x /c:"ast-grep !AST_GREP_VERSION!" >nul 2>&1
+if !ERRORLEVEL! neq 0 (
+    echo Skipping ast-grep sidecar install ^(verified archive contained an unexpected binary version^)
+    goto :ast_grep_cleanup
+)
+move /y "!AST_GREP_STAGED!" "!AST_GREP_PATH!" >nul
+if !ERRORLEVEL! equ 0 (
+    echo ast-grep sidecar installed to !AST_GREP_PATH!
+) else (
+    echo Skipping ast-grep sidecar install ^(atomic install failed^)
+)
+
+:ast_grep_cleanup
+if exist "!AST_GREP_ARCHIVE!" del "!AST_GREP_ARCHIVE!"
+if exist "!AST_GREP_STAGED!" del "!AST_GREP_STAGED!"
+if exist "!AST_GREP_EXTRACT!" rmdir /s /q "!AST_GREP_EXTRACT!"
 goto :eof
 
 REM ======================================================================

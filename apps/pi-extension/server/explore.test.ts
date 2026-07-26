@@ -78,7 +78,7 @@ describe("Pi Codebase Atlas server", () => {
 		expect(favicon.headers.get("content-type")).toBe("image/png");
 
 		const snapshot = await waitForSnapshot(server.url);
-		expect(snapshot.version).toBe(1);
+		expect(snapshot.version).toBe(2);
 		expect(snapshot.rootPath).toBe(root);
 		expect((snapshot.summary as { files: number }).files).toBe(2);
 
@@ -92,15 +92,17 @@ describe("Pi Codebase Atlas server", () => {
 		});
 
 		const references = await fetch(
-			`${server.url}/api/atlas/references?symbol=greet&path=${encodeURIComponent("src/main.ts")}`,
+			`${server.url}/api/atlas/references?symbol=greet&path=${encodeURIComponent("src/main.ts")}&line=3&column=10`,
 		);
 		expect(references.status).toBe(200);
 		const referenceBody = await references.json() as {
 			definitions: Array<{ filePath: string }>;
 			references: Array<{ filePath: string }>;
+			provider: { kind: string; status: string };
 		};
 		expect(referenceBody.definitions.some((location) => location.filePath === "src/greet.ts")).toBe(true);
-		expect(referenceBody.references.some((location) => location.filePath === "src/main.ts")).toBe(true);
+		expect(referenceBody.references).toHaveLength(0);
+		expect(referenceBody.provider).toMatchObject({ kind: "syntax", status: "unavailable" });
 
 		const closeRequest = fetch(`${server.url}/api/atlas/close`, { method: "POST" });
 		await expect(closeRequest.then((response) => response.json())).resolves.toEqual({ ok: true });
