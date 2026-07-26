@@ -139,6 +139,20 @@ function formatFileAnnotations(fileAnnotations: CodeAnnotation[], headingLevel =
     const scope = ann.scope ?? 'line';
     const prefix = formatConventionalPrefix(ann.conventionalLabel, ann.decorations);
 
+    if (ann.source === 'atlas') {
+      const lineRange = ann.lineStart === ann.lineEnd
+        ? `Source line ${ann.lineStart}`
+        : `Source lines ${ann.lineStart}-${ann.lineEnd}`;
+      output += `${headingLevel} ${lineRange}\n`;
+      if (ann.atlasSnapshotGeneratedAt) {
+        output += `_Codebase snapshot: ${ann.atlasSnapshotGeneratedAt}_\n`;
+      }
+      if (ann.text) output += `${prefix}${ann.text}\n`;
+      if (ann.reasoning) output += `\n**Reasoning:** ${ann.reasoning}\n`;
+      output += '\n';
+      continue;
+    }
+
     if (scope === 'file') {
       output += `${headingLevel} File Comment\n`;
       output += commitMismatchNote(ann, commitShaFromMode(currentDiff?.mode));

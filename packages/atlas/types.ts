@@ -123,28 +123,13 @@ export interface SourceFile {
   language: string;
 }
 
-export interface AtlasAnnotation {
-  id: string;
+export interface AtlasSourceAnnotationDraft {
   filePath: string;
   lineStart: number;
   lineEnd: number;
   text: string;
   selectedCode?: string;
-  createdAt: string;
   snapshotGeneratedAt: string;
-}
-
-export interface AtlasAnnotationDraft {
-  filePath: string;
-  lineStart: number;
-  lineEnd: number;
-  text: string;
-  selectedCode?: string;
-}
-
-export interface AtlasFeedback {
-  annotations: AtlasAnnotation[];
-  markdown: string;
 }
 
 export interface ReferenceLocation {

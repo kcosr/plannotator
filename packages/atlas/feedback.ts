@@ -1,12 +1,12 @@
-import type { AtlasAnnotation } from './types';
+import type { CodeAnnotation } from '@plannotator/shared/code-annotation';
 
-export function formatAtlasFeedback(annotations: AtlasAnnotation[]): string {
+export function formatAtlasFeedback(annotations: CodeAnnotation[]): string {
   if (annotations.length === 0) return '';
   const ordered = [...annotations].sort(
     (first, second) =>
       first.filePath.localeCompare(second.filePath)
       || first.lineStart - second.lineStart
-      || first.createdAt.localeCompare(second.createdAt),
+      || first.createdAt - second.createdAt,
   );
   return [
     '## Codebase Atlas feedback',
@@ -19,8 +19,8 @@ export function formatAtlasFeedback(annotations: AtlasAnnotation[]): string {
         `### ${annotation.filePath}:${annotation.lineStart}`,
         '',
         `${lines}: ${annotation.text}`,
-        ...(annotation.selectedCode
-          ? ['', '```', annotation.selectedCode, '```']
+        ...(annotation.originalCode
+          ? ['', '```', annotation.originalCode, '```']
           : []),
         '',
       ];
@@ -28,7 +28,7 @@ export function formatAtlasFeedback(annotations: AtlasAnnotation[]): string {
   ].join('\n').trimEnd();
 }
 
-export function formatAtlasAnnotationSummary(annotations: AtlasAnnotation[]): string {
+export function formatAtlasAnnotationSummary(annotations: CodeAnnotation[]): string {
   return annotations
     .map((annotation) =>
       `- ${annotation.filePath}:${annotation.lineStart}-${annotation.lineEnd}: ${annotation.text}`,

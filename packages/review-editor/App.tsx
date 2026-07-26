@@ -107,6 +107,8 @@ import { GuideScreen } from './components/guide/GuideScreen';
 import { DEMO_GUIDE_ID } from './demoGuide';
 import { buildPRArtifacts } from './utils/prArtifacts';
 import { ReviewAtlasSurface } from './components/ReviewAtlasSurface';
+import type { ReviewAtlasMode } from './components/ReviewAtlasSurface';
+import type { AtlasSourceAnnotationDraft, AtlasWorkspaceSourceTarget } from '@plannotator/atlas';
 
 declare const __APP_VERSION__: string;
 
@@ -247,6 +249,11 @@ const ReviewApp: React.FC = () => {
   const reviewSidebar = useSidebar<ReviewSidebarTab>(false, 'annotations');
   const [isFileTreeOpen, setIsFileTreeOpen] = useState(true);
   const [reviewSurface, setReviewSurface] = useState<ReviewSurface>('diff');
+  const lastAtlasModeRef = useRef<ReviewAtlasMode>('codebase');
+  if (reviewSurface !== 'diff') lastAtlasModeRef.current = reviewSurface;
+  const [atlasNavigationTarget, setAtlasNavigationTarget] = useState<
+    (AtlasWorkspaceSourceTarget & { token: number }) | undefined
+  >();
   // Guided Review screen takeover — file tree + center dock hidden (dock stays
   // mounted, just CSS-hidden; see the dock wrapper below), right sidebar untouched.
   const [guideOpen, setGuideOpen] = useState(false);
@@ -571,6 +578,19 @@ const ReviewApp: React.FC = () => {
   }, [annotations, externalAnnotations]);
   const allAnnotationsRef = useRef(allAnnotations);
   allAnnotationsRef.current = allAnnotations;
+  const diffAnnotations = useMemo(
+    () => allAnnotations.filter((annotation) => annotation.source !== 'atlas'),
+    [allAnnotations],
+  );
+  const annotationSummary = useMemo(
+    () => allAnnotations.map((annotation) => {
+      const lines = annotation.lineStart === annotation.lineEnd
+        ? String(annotation.lineStart)
+        : `${annotation.lineStart}-${annotation.lineEnd}`;
+      return `- ${annotation.filePath}:${lines}: ${annotation.text ?? annotation.type}`;
+    }).join('\n'),
+    [allAnnotations],
+  );
 
   // Auto-save code annotation drafts
   const { draftBanner, restoreDraft, getDraftGeneration, dismissDraft } = useCodeAnnotationDraft({
@@ -658,6 +678,7 @@ const ReviewApp: React.FC = () => {
     diffType,
     base: committedBase,
     reviewContext: diffData?.aiReviewContext,
+    annotationSummary,
     viewing: {
       scope: isAllFilesActive ? 'all' : 'file',
       filePath: isAllFilesActive ? undefined : files[activeFileIndex]?.path,
@@ -832,6 +853,27 @@ const ReviewApp: React.FC = () => {
   const handleAskGeneral = useCallback((question: string) => {
     askAI({ prompt: question });
   }, [askAI]);
+
+  const handleAskAIFromAtlas = useCallback((
+    question: string,
+    draft: AtlasSourceAnnotationDraft,
+  ) => {
+    reviewSidebar.open('ai');
+    void askAI({
+      prompt: question,
+      filePath: draft.filePath,
+      lineStart: draft.lineStart,
+      lineEnd: draft.lineEnd,
+      side: 'new',
+      selectedCode: draft.selectedCode,
+      scope: {
+        kind: 'selection',
+        label: `${draft.filePath}:${draft.lineStart}-${draft.lineEnd}`,
+        sourcePath: draft.filePath,
+        text: draft.selectedCode,
+      },
+    });
+  }, [askAI, reviewSidebar.open]);
 
   // Resizable panels
   const panelResize = useResizablePanel({
@@ -1498,6 +1540,27 @@ const ReviewApp: React.FC = () => {
     };
 
     setAnnotations(prev => [...prev, withPRContext(newAnnotation)]);
+  }, [identity, withPRContext]);
+
+  const handleAddAtlasAnnotation = useCallback((draft: AtlasSourceAnnotationDraft) => {
+    const text = draft.text.trim();
+    if (!text) return;
+    const annotation: CodeAnnotation = {
+      id: generateId(),
+      type: 'comment',
+      scope: 'line',
+      filePath: draft.filePath,
+      lineStart: draft.lineStart,
+      lineEnd: draft.lineEnd,
+      side: 'new',
+      text,
+      originalCode: draft.selectedCode,
+      createdAt: Date.now(),
+      author: identity,
+      source: 'atlas',
+      atlasSnapshotGeneratedAt: draft.snapshotGeneratedAt,
+    };
+    setAnnotations((current) => [...current, withPRContext(annotation)]);
   }, [identity, withPRContext]);
 
   // Edit annotation
@@ -2243,6 +2306,18 @@ const ReviewApp: React.FC = () => {
       setSelectedAnnotationId(null);
       return;
     }
+    if (annotation.source === 'atlas') {
+      setReviewSurface('codebase');
+      setSelectedAnnotationId(id);
+      setScrollTargetAnnotation(null);
+      setAtlasNavigationTarget((current) => ({
+        path: annotation.filePath,
+        line: annotation.lineStart,
+        selection: 'line',
+        token: (current?.token ?? 0) + 1,
+      }));
+      return;
+    }
     // While the guide takeover is open, the dock's active file is meaningless
     // (guide renders its own per-section diffs) — skip the dock file-switch
     // mutation so leaving the guide doesn't land on an unexpected file, and
@@ -2327,7 +2402,7 @@ const ReviewApp: React.FC = () => {
     prDiffScope,
     agentCwd,
     canUseLiveWorkspaceActions,
-    allAnnotations,
+    allAnnotations: diffAnnotations,
     externalAnnotations,
     selectedAnnotationId,
     scrollTargetAnnotation,
@@ -2416,7 +2491,7 @@ const ReviewApp: React.FC = () => {
     files, diffData?.rawPatch, activeFileIndex, guideOpen, reviewSurface, diffStyle, diffOverflow, diffIndicators,
     diffLineDiffType, diffShowLineNumbers, diffShowBackground,
     diffExpandUnchanged, diffFontFamily, diffFontSize, activeDiffBase, committedBase, feedbackDiffContext, prReviewScopeLabel, prDiffScope, agentCwd, canUseLiveWorkspaceActions,
-    allAnnotations, externalAnnotations,
+    diffAnnotations, externalAnnotations,
     visibleDescriptionAnnotations, selectedDescriptionAnnotationId, handleAddDescriptionAnnotation,
     handleSelectDescriptionAnnotation, handleDeleteDescriptionAnnotation, handleAskAIForDescription,
     visibleCommentAnnotations, selectedCommentAnnotationId, handleAddCommentAnnotation,
@@ -3281,7 +3356,7 @@ const ReviewApp: React.FC = () => {
                 onSelectFile={handleFilePreview}
                 onDoubleClickFile={handleFilePinned}
                 enableKeyboardNav={!showExportModal && hasSearchableFiles}
-                annotations={allAnnotations}
+                annotations={diffAnnotations}
                 viewedFiles={viewedFiles}
                 onToggleViewed={handleToggleViewed}
                 hideViewedFiles={hideViewedFiles}
@@ -3364,7 +3439,7 @@ const ReviewApp: React.FC = () => {
                 scrollHighlightIndex={isAllFilesActive && allFilesVisibleFile ? files.findIndex(f => f.path === allFilesVisibleFile) : undefined}
                 onSelectFile={handleFilePreview}
                 onDoubleClickFile={handleFilePinned}
-                annotations={allAnnotations}
+                annotations={diffAnnotations}
                 viewedFiles={viewedFiles}
                 onToggleViewed={handleToggleViewed}
                 hideViewedFiles={hideViewedFiles}
@@ -3434,14 +3509,28 @@ const ReviewApp: React.FC = () => {
             </div>
           )}
 
-          {reviewSurface !== 'diff' && (
+          <div className={`flex-1 min-w-0 overflow-hidden ${guideVisible || reviewSurface === 'diff' ? 'hidden' : ''}`}>
             <ReviewAtlasSurface
-              mode={reviewSurface}
+              mode={reviewSurface === 'diff' ? lastAtlasModeRef.current : reviewSurface}
+              repositoryKey={
+                prMetadata?.url
+                ?? activeWorktreePath
+                ?? agentCwd
+                ?? gitContext?.cwd
+                ?? 'local-review'
+              }
               rawPatch={diffData?.rawPatch ?? ''}
               onOpenDiffFile={openDiffFile}
               onRequestCodebase={() => setReviewSurface('codebase')}
+              annotations={allAnnotations}
+              aiAvailable={aiAvailable}
+              navigationTarget={atlasNavigationTarget}
+              onAddAnnotation={handleAddAtlasAnnotation}
+              onUpdateAnnotation={(id, text) => handleEditAnnotation(id, text)}
+              onDeleteAnnotation={handleDeleteAnnotation}
+              onAskAI={handleAskAIFromAtlas}
             />
-          )}
+          </div>
 
           {/* Center dock area */}
           <div className={`flex-1 min-w-0 overflow-hidden relative ${guideVisible || reviewSurface !== 'diff' ? 'hidden' : ''}`}>

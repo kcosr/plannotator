@@ -23,6 +23,7 @@ import {
   type AtlasIndexStatus,
   type AtlasNode,
   type AtlasSnapshot,
+  type AtlasSourceAnnotationDraft,
   type AtlasSourceLoaders,
   type AtlasView,
   type AtlasWorkspaceSourceTarget,
@@ -33,6 +34,7 @@ import {
   type ReferenceResponse,
   type SizeMetric,
 } from '@plannotator/atlas';
+import type { CodeAnnotation } from '@plannotator/ui/types';
 import {
   buildReviewAtlasImpact,
   buildReviewAtlasScope,
@@ -48,9 +50,17 @@ export type ReviewAtlasMode = 'scope' | 'codebase';
 
 interface ReviewAtlasSurfaceProps {
   mode: ReviewAtlasMode;
+  repositoryKey: string;
   rawPatch: string;
   onOpenDiffFile: (path: string) => void;
   onRequestCodebase: () => void;
+  annotations: CodeAnnotation[];
+  aiAvailable: boolean;
+  navigationTarget?: AtlasWorkspaceSourceTarget & { token: number };
+  onAddAnnotation: (draft: AtlasSourceAnnotationDraft) => void;
+  onUpdateAnnotation: (id: string, text: string) => void;
+  onDeleteAnnotation: (id: string) => void;
+  onAskAI: (question: string, draft: AtlasSourceAnnotationDraft) => void;
 }
 
 type AtlasSurfaceState =
@@ -331,9 +341,17 @@ function ScopeSidebar({
 
 export function ReviewAtlasSurface({
   mode,
+  repositoryKey,
   rawPatch,
   onOpenDiffFile,
   onRequestCodebase,
+  annotations,
+  aiAvailable,
+  navigationTarget,
+  onAddAnnotation,
+  onUpdateAnnotation,
+  onDeleteAnnotation,
+  onAskAI,
 }: ReviewAtlasSurfaceProps) {
   const [loadKey, setLoadKey] = useState(0);
   const [surfaceState, setSurfaceState] = useState<AtlasSurfaceState>({
@@ -358,6 +376,23 @@ export function ReviewAtlasSurface({
   const [sourceHistoryIndex, setSourceHistoryIndex] = useState(-1);
   const [selectedHotspotId, setSelectedHotspotId] = useState<string | null>(null);
   const [impactState, setImpactState] = useState<ImpactState>({ kind: 'idle' });
+  const repositoryKeyRef = useRef(repositoryKey);
+
+  useEffect(() => {
+    if (repositoryKeyRef.current === repositoryKey) return;
+    repositoryKeyRef.current = repositoryKey;
+    snapshotRef.current = null;
+    loadedRevisionRef.current = null;
+    setSelectedId(null);
+    setFocusedRootId(null);
+    setSourceHistory([]);
+    setSourceHistoryIndex(-1);
+    setSelectedHotspotId(null);
+    setImpactState({ kind: 'idle' });
+    setQuery('');
+    setRelationshipsOpen(false);
+    setLoadKey((key) => key + 1);
+  }, [repositoryKey]);
   const [impactLoadKey, setImpactLoadKey] = useState(0);
 
   useEffect(() => {
@@ -522,6 +557,14 @@ export function ReviewAtlasSurface({
     setSourceHistoryIndex((index) => index + 1);
   }, [nodes, sourceHistoryIndex]);
 
+  const handledNavigationTokenRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (!navigationTarget || handledNavigationTokenRef.current === navigationTarget.token) return;
+    if (!nodes.some((node) => node.kind === 'file' && node.path === navigationTarget.path)) return;
+    handledNavigationTokenRef.current = navigationTarget.token;
+    openSource(navigationTarget);
+  }, [navigationTarget, nodes, openSource]);
+
   const navigateSourceHistory = useCallback((index: number) => {
     const target = sourceHistory[index];
     if (!target) return;
@@ -665,8 +708,8 @@ export function ReviewAtlasSurface({
             sourceTarget={currentSourceTarget}
             canNavigateSourceBack={sourceHistoryIndex > 0}
             canNavigateSourceForward={sourceHistoryIndex < sourceHistory.length - 1}
-            annotations={[]}
-            capabilities={{ annotations: false, askAI: false }}
+            annotations={annotations.filter((annotation) => annotation.source === 'atlas')}
+            capabilities={{ annotations: true, askAI: aiAvailable }}
             mapOverlay={mode === 'scope'
               ? currentImpactState.kind === 'ready'
                 ? currentImpactState.impact.overlay
@@ -685,6 +728,10 @@ export function ReviewAtlasSurface({
             onRelationshipsOpenChange={setRelationshipsOpen}
             onQueryChange={setQuery}
             onSidebarOpenChange={setSidebarOpen}
+            onAddAnnotation={onAddAnnotation}
+            onUpdateAnnotation={onUpdateAnnotation}
+            onDeleteAnnotation={onDeleteAnnotation}
+            onAskAI={onAskAI}
           />
           {mode === 'scope' && currentImpactState.kind === 'ready' && (
             <div className="review-atlas-impact-legend" aria-label="Impact relationship colors">

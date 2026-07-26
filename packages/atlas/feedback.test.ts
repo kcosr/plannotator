@@ -1,16 +1,20 @@
 import { describe, expect, test } from 'bun:test';
 import { formatAtlasAnnotationSummary, formatAtlasFeedback } from './feedback';
-import type { AtlasAnnotation } from './types';
+import type { CodeAnnotation } from '@plannotator/shared/code-annotation';
 
-const annotation: AtlasAnnotation = {
+const annotation: CodeAnnotation = {
   id: 'one',
+  type: 'comment',
+  scope: 'line',
   filePath: 'src/main.ts',
   lineStart: 4,
   lineEnd: 6,
+  side: 'new',
   text: 'Explain why this branch is necessary.',
-  selectedCode: 'if (ready) {\n  run();\n}',
-  createdAt: '2026-07-26T10:00:00.000Z',
-  snapshotGeneratedAt: '2026-07-26T09:59:00.000Z',
+  originalCode: 'if (ready) {\n  run();\n}',
+  createdAt: Date.parse('2026-07-26T10:00:00.000Z'),
+  source: 'atlas',
+  atlasSnapshotGeneratedAt: '2026-07-26T09:59:00.000Z',
 };
 
 describe('Atlas feedback formatting', () => {

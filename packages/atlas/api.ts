@@ -1,10 +1,10 @@
 import type {
-  AtlasFeedback,
   AtlasSnapshot,
   CallHierarchyResponse,
   ReferenceResponse,
   SourceFile,
 } from './types';
+import type { CodeAnnotation } from '@plannotator/shared/code-annotation';
 
 export interface AtlasIndexStatus {
   status: 'indexing' | 'ready' | 'error';
@@ -87,8 +87,11 @@ export function closeAtlas() {
   return request<{ ok: boolean }>('/api/atlas/close', { method: 'POST' });
 }
 
-export function submitAtlasFeedback(feedback: AtlasFeedback) {
-  return request<AtlasFeedback>('/api/atlas/feedback', {
+export function submitAtlasFeedback(feedback: {
+  annotations: CodeAnnotation[];
+  markdown: string;
+}) {
+  return request<{ annotations: CodeAnnotation[]; markdown: string }>('/api/atlas/feedback', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(feedback),

@@ -35,6 +35,7 @@ import {
   startBunServerOnAvailablePort,
 } from "./remote";
 import { handleFavicon } from "./shared-handlers";
+import type { CodeAnnotation } from "@plannotator/shared/code-annotation";
 
 export { handleServerReady as handleExploreServerReady } from "./shared-handlers";
 
@@ -56,19 +57,8 @@ export interface ExploreServerResult {
   stop: () => void;
 }
 
-export interface AtlasFeedbackAnnotation {
-  id: string;
-  filePath: string;
-  lineStart: number;
-  lineEnd: number;
-  text: string;
-  selectedCode?: string;
-  createdAt: string;
-  snapshotGeneratedAt: string;
-}
-
 export interface AtlasFeedbackResult {
-  annotations: AtlasFeedbackAnnotation[];
+  annotations: CodeAnnotation[];
   markdown: string;
 }
 
@@ -223,7 +213,7 @@ async function parseAtlasFeedback(
     return "Annotations must be an array and markdown must be a string";
   }
 
-  const parsed: AtlasFeedbackAnnotation[] = [];
+  const parsed: CodeAnnotation[] = [];
   const ids = new Set<string>();
   for (const value of annotations) {
     if (
@@ -232,8 +222,11 @@ async function parseAtlasFeedback(
       || Array.isArray(value)
       || !hasExactKeys(
         value as Record<string, unknown>,
-        ["id", "filePath", "lineStart", "lineEnd", "text", "createdAt", "snapshotGeneratedAt"],
-        ["selectedCode"],
+        [
+          "id", "type", "scope", "filePath", "lineStart", "lineEnd", "side",
+          "text", "createdAt", "source", "atlasSnapshotGeneratedAt",
+        ],
+        ["originalCode"],
       )
     ) {
       return "Each annotation must contain the expected Atlas annotation fields";
@@ -241,25 +234,33 @@ async function parseAtlasFeedback(
     const annotation = value as Record<string, unknown>;
     const {
       id,
+      type,
+      scope,
       filePath,
       lineStart,
       lineEnd,
+      side,
       text,
-      selectedCode,
+      originalCode,
       createdAt,
-      snapshotGeneratedAt,
+      source,
+      atlasSnapshotGeneratedAt,
     } = annotation;
     if (
       typeof id !== "string"
       || id.length === 0
       || ids.has(id)
+      || type !== "comment"
+      || scope !== "line"
       || typeof filePath !== "string"
       || typeof text !== "string"
-      || typeof createdAt !== "string"
-      || createdAt.length === 0
-      || typeof snapshotGeneratedAt !== "string"
-      || snapshotGeneratedAt.length === 0
-      || (selectedCode !== undefined && typeof selectedCode !== "string")
+      || side !== "new"
+      || typeof createdAt !== "number"
+      || !Number.isFinite(createdAt)
+      || source !== "atlas"
+      || typeof atlasSnapshotGeneratedAt !== "string"
+      || atlasSnapshotGeneratedAt.length === 0
+      || (originalCode !== undefined && typeof originalCode !== "string")
       || !Number.isInteger(lineStart)
       || !Number.isInteger(lineEnd)
       || (lineStart as number) < 1
@@ -272,8 +273,8 @@ async function parseAtlasFeedback(
     if (!sourcePath || sourcePath !== filePath.replace(/\\/g, "/")) {
       return `Annotation path is outside the repository or invalid: ${filePath}`;
     }
-    const source = await readAtlasSource(rootPath, sourcePath);
-    const lineCount = source.content.split(/\r?\n/).length;
+    const sourceFile = await readAtlasSource(rootPath, sourcePath);
+    const lineCount = sourceFile.content.split(/\r?\n/).length;
     if ((lineEnd as number) > lineCount) {
       return `Annotation line range is outside the source file: ${filePath}`;
     }
@@ -281,13 +282,17 @@ async function parseAtlasFeedback(
     ids.add(id);
     parsed.push({
       id,
+      type: "comment",
+      scope: "line",
       filePath,
       lineStart: lineStart as number,
       lineEnd: lineEnd as number,
+      side: "new",
       text,
-      ...(selectedCode !== undefined && { selectedCode }),
-      createdAt,
-      snapshotGeneratedAt,
+      ...(originalCode !== undefined && { originalCode }),
+      createdAt: createdAt as number,
+      source: "atlas",
+      atlasSnapshotGeneratedAt,
     });
   }
 

@@ -59,12 +59,12 @@ import {
 import type { AtlasIndexStatus } from './api';
 import { formatAtlasAnnotationSummary, formatAtlasFeedback } from './feedback';
 import { formatBytes, formatNumber } from './format';
+import type { CodeAnnotation } from '@plannotator/shared/code-annotation';
 import type {
   AtlasDependency,
-  AtlasAnnotation,
-  AtlasAnnotationDraft,
   AtlasNode,
   AtlasSnapshot,
+  AtlasSourceAnnotationDraft,
   AtlasSymbol,
   AtlasView,
   CodeFilter,
@@ -398,7 +398,7 @@ export interface AtlasWorkspaceProps {
   sourceTarget?: AtlasWorkspaceSourceTarget;
   canNavigateSourceBack: boolean;
   canNavigateSourceForward: boolean;
-  annotations: AtlasAnnotation[];
+  annotations: CodeAnnotation[];
   capabilities: {
     annotations: boolean;
     askAI: boolean;
@@ -417,10 +417,10 @@ export interface AtlasWorkspaceProps {
   onRelationshipsOpenChange: (open: boolean) => void;
   onQueryChange: (query: string) => void;
   onSidebarOpenChange: (open: boolean) => void;
-  onAddAnnotation?: (draft: AtlasAnnotationDraft) => void;
+  onAddAnnotation?: (draft: AtlasSourceAnnotationDraft) => void;
   onUpdateAnnotation?: (id: string, text: string) => void;
   onDeleteAnnotation?: (id: string) => void;
-  onAskAI?: (question: string, draft: AtlasAnnotationDraft) => void;
+  onAskAI?: (question: string, draft: AtlasSourceAnnotationDraft) => void;
 }
 
 /**
@@ -661,6 +661,7 @@ export function AtlasWorkspace({
               node={selectedFile}
               nodes={snapshot.nodes}
               analyzers={snapshot.analyzers}
+              snapshotGeneratedAt={snapshot.generatedAt}
               codeFilter={codeFilter}
               loaders={sourceLoaders}
               targetLine={sourceTarget?.path === selectedFile.path ? sourceTarget.line : undefined}
@@ -700,7 +701,7 @@ export default function AtlasApp() {
   const [dark, setDark] = useState(() => !window.matchMedia('(prefers-color-scheme: light)').matches);
   const [sourceHistory, setSourceHistory] = useState<AtlasWorkspaceSourceTarget[]>([]);
   const [sourceHistoryIndex, setSourceHistoryIndex] = useState(-1);
-  const [annotations, setAnnotations] = useState<AtlasAnnotation[]>([]);
+  const [annotations, setAnnotations] = useState<CodeAnnotation[]>([]);
   const [aiOpen, setAiOpen] = useState(false);
   const [aiAvailable, setAiAvailable] = useState(false);
   const [aiProviders, setAiProviders] = useState<Array<{
@@ -801,15 +802,22 @@ export default function AtlasApp() {
     setView('overview');
   }, []);
 
-  const addAnnotation = useCallback((draft: AtlasAnnotationDraft) => {
-    const timestamp = new Date().toISOString();
+  const addAnnotation = useCallback((draft: AtlasSourceAnnotationDraft) => {
     setAnnotations((current) => [...current, {
-      ...draft,
       id: crypto.randomUUID(),
-      createdAt: timestamp,
-      snapshotGeneratedAt: snapshot?.generatedAt ?? timestamp,
+      type: 'comment',
+      scope: 'line',
+      filePath: draft.filePath,
+      lineStart: draft.lineStart,
+      lineEnd: draft.lineEnd,
+      side: 'new',
+      text: draft.text,
+      originalCode: draft.selectedCode,
+      createdAt: Date.now(),
+      source: 'atlas',
+      atlasSnapshotGeneratedAt: draft.snapshotGeneratedAt,
     }]);
-  }, [snapshot?.generatedAt]);
+  }, []);
 
   const updateAnnotation = useCallback((id: string, text: string) => {
     setAnnotations((current) => current.map((annotation) =>
@@ -828,7 +836,7 @@ export default function AtlasApp() {
     });
   }, [aiChat.ask, annotationSummary]);
 
-  const askSelection = useCallback((question: string, draft: AtlasAnnotationDraft) => {
+  const askSelection = useCallback((question: string, draft: AtlasSourceAnnotationDraft) => {
     setAiOpen(true);
     void aiChat.ask({
       prompt: question,

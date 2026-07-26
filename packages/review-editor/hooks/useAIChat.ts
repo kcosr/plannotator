@@ -22,6 +22,8 @@ interface UseAIChatOptions {
   /** Server-built "changes under review" description for the current view (the
    *  shared agent-review machine's output). Latched onto each question. */
   reviewContext?: string;
+  /** Live review notes attached to every question so Atlas and diff asks share context. */
+  annotationSummary?: string;
   /** What the user is currently viewing (read fresh on each question). */
   viewing?: Viewing;
   providerId?: string | null;
@@ -34,6 +36,7 @@ export function useAIChat({
   diffType,
   base,
   reviewContext,
+  annotationSummary,
   viewing,
   providerId,
   model,
@@ -59,6 +62,8 @@ export function useAIChat({
   // changes; a short reminder otherwise (see buildReviewContextPreamble).
   const reviewContextRef = useRef(reviewContext);
   reviewContextRef.current = reviewContext;
+  const annotationSummaryRef = useRef(annotationSummary);
+  annotationSummaryRef.current = annotationSummary;
   const lastSentContextRef = useRef<string | undefined>(undefined);
 
   const ask = useCallback(
@@ -72,7 +77,17 @@ export function useAIChat({
       const changed = freshSession || (ctx ?? '') !== (lastSentContextRef.current ?? '');
       const contextPreamble = buildReviewContextPreamble(ctx, { changed });
       lastSentContextRef.current = ctx;
-      return chat.ask({ viewing: viewingRef.current, contextPreamble, ...params });
+      const liveAnnotations = annotationSummaryRef.current;
+      const contextUpdate = [
+        params.contextUpdate,
+        liveAnnotations ? `Current review annotations:\n${liveAnnotations}` : undefined,
+      ].filter(Boolean).join('\n\n') || undefined;
+      return chat.ask({
+        viewing: viewingRef.current,
+        contextPreamble,
+        ...params,
+        ...(contextUpdate && { contextUpdate }),
+      });
     },
     [chat],
   );

@@ -63,7 +63,7 @@ function buildAnnotationFileComments(
   annotations: CodeAnnotation[],
 ): SubmissionTarget['fileComments'] {
   return annotations
-    .filter(a => (a.scope ?? 'line') === 'line')
+    .filter(a => (a.scope ?? 'line') === 'line' && a.source !== 'atlas')
     .map(ann => {
       const ccPrefix = formatConventionalPrefix(ann.conventionalLabel, ann.decorations);
       let body = ccPrefix + (ann.text ?? '');
@@ -90,7 +90,12 @@ function buildFileScopedBody(annotations: CodeAnnotation[]): string {
   const parts: string[] = [];
   for (const a of annotations) {
     const scope = a.scope ?? 'line';
-    if (scope === 'file' && a.text) parts.push(`**${a.filePath}:** ${a.text}`);
+    if (a.source === 'atlas' && a.text) {
+      const location = a.lineStart === a.lineEnd
+        ? `${a.filePath}:${a.lineStart}`
+        : `${a.filePath}:${a.lineStart}-${a.lineEnd}`;
+      parts.push(`**${location} (codebase source):** ${a.text}`);
+    } else if (scope === 'file' && a.text) parts.push(`**${a.filePath}:** ${a.text}`);
     else if (scope === 'general' && a.text) parts.push(a.text);
   }
   return parts.join('\n\n');

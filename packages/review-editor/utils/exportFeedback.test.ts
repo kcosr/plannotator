@@ -31,6 +31,18 @@ const prMeta: PRMetadata = {
 };
 
 describe("exportReviewFeedback", () => {
+  it("labels Atlas annotations as codebase source locations", () => {
+    const result = exportReviewFeedback([ann({
+      source: "atlas",
+      lineStart: 14,
+      lineEnd: 16,
+      atlasSnapshotGeneratedAt: "2026-07-26T12:00:00.000Z",
+    })]);
+    expect(result).toContain("Source lines 14-16");
+    expect(result).toContain("Codebase snapshot: 2026-07-26T12:00:00.000Z");
+    expect(result).not.toContain("Lines 14-16 (new)");
+  });
+
   it("local mode: uses generic header, no PR content", () => {
     const result = exportReviewFeedback([ann()]);
     expect(result).toStartWith("# Code Review Feedback\n\n");

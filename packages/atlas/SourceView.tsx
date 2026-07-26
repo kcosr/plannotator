@@ -24,9 +24,8 @@ import { lineMatchesFilter, symbolMatchesFilter } from './codeFilter';
 import { isInspectableSymbol, referencePositionFromToken } from './referencePosition';
 import type {
   AtlasAnalyzers,
-  AtlasAnnotation,
-  AtlasAnnotationDraft,
   AtlasNode,
+  AtlasSourceAnnotationDraft,
   AtlasSymbol,
   CallHierarchyLocation,
   CallHierarchyResponse,
@@ -36,6 +35,7 @@ import type {
   ReferenceResponse,
   SourceFile,
 } from './types';
+import type { CodeAnnotation } from '@plannotator/shared/code-annotation';
 
 export interface AtlasSourceNavigationTarget {
   path: string;
@@ -66,6 +66,7 @@ export interface SourceViewProps {
   node: AtlasNode;
   nodes: AtlasNode[];
   analyzers: AtlasAnalyzers;
+  snapshotGeneratedAt: string;
   targetLine?: number;
   targetColumn?: number;
   targetSymbol?: string;
@@ -73,13 +74,13 @@ export interface SourceViewProps {
   codeFilter: CodeFilter;
   loaders: AtlasSourceLoaders;
   onNavigateFile: (target: AtlasSourceNavigationTarget) => void;
-  annotations: AtlasAnnotation[];
+  annotations: CodeAnnotation[];
   annotationControlsEnabled: boolean;
   aiAvailable: boolean;
-  onAddAnnotation?: (draft: AtlasAnnotationDraft) => void;
+  onAddAnnotation?: (draft: AtlasSourceAnnotationDraft) => void;
   onUpdateAnnotation?: (id: string, text: string) => void;
   onDeleteAnnotation?: (id: string) => void;
-  onAskAI?: (question: string, draft: AtlasAnnotationDraft) => void;
+  onAskAI?: (question: string, draft: AtlasSourceAnnotationDraft) => void;
 }
 
 const PIERRE_SOURCE_CSS = `
@@ -273,6 +274,7 @@ export function SourceView({
   node,
   nodes,
   analyzers,
+  snapshotGeneratedAt,
   targetLine,
   targetColumn,
   targetSymbol,
@@ -517,7 +519,7 @@ export function SourceView({
     setEditingAnnotationId(null);
   }, []);
 
-  const annotationDraft = useCallback((): AtlasAnnotationDraft | null => {
+  const annotationDraft = useCallback((): AtlasSourceAnnotationDraft | null => {
     if (!source || !composeSelection) return null;
     const lineStart = Math.min(composeSelection.start, composeSelection.end);
     const lineEnd = Math.max(composeSelection.start, composeSelection.end);
@@ -527,8 +529,9 @@ export function SourceView({
       lineEnd,
       text: composeText.trim(),
       selectedCode: source.content.split(/\r\n|\r|\n/).slice(lineStart - 1, lineEnd).join('\n'),
+      snapshotGeneratedAt,
     };
-  }, [composeSelection, composeText, node.path, source]);
+  }, [composeSelection, composeText, node.path, snapshotGeneratedAt, source]);
 
   const saveAnnotation = useCallback(() => {
     const draft = annotationDraft();
@@ -551,10 +554,10 @@ export function SourceView({
     closeComposer();
   }, [aiAvailable, annotationDraft, closeComposer, onAskAI]);
 
-  const editAnnotation = useCallback((annotation: AtlasAnnotation) => {
+  const editAnnotation = useCallback((annotation: CodeAnnotation) => {
     setEditingAnnotationId(annotation.id);
     setComposeSelection({ start: annotation.lineStart, end: annotation.lineEnd });
-    setComposeText(annotation.text);
+    setComposeText(annotation.text ?? '');
     scrollToLine(annotation.lineStart);
   }, [scrollToLine]);
 
@@ -598,7 +601,7 @@ export function SourceView({
     if (container) applySourceDecorations(container);
   }, [node, codeFilter, source, navigationHighlight, annotations, applySourceDecorations]);
 
-  const lineAnnotations = useMemo<LineAnnotation<AtlasAnnotation>[]>(
+  const lineAnnotations = useMemo<LineAnnotation<CodeAnnotation>[]>(
     () => annotations.map((annotation) => ({
       lineNumber: annotation.lineEnd,
       metadata: annotation,
@@ -607,7 +610,7 @@ export function SourceView({
   );
 
   const renderAnnotation = useCallback(
-    (lineAnnotation: LineAnnotation<AtlasAnnotation>) => {
+    (lineAnnotation: LineAnnotation<CodeAnnotation>) => {
       const annotation = lineAnnotation.metadata;
       return (
         <div className="atlas-inline-annotation">

@@ -1,3 +1,18 @@
+import type {
+  CodeAnnotationType,
+  ConventionalDecoration,
+  ConventionalLabel,
+  ImageAttachment,
+} from '@plannotator/shared/code-annotation';
+export type {
+  CodeAnnotation,
+  CodeAnnotationScope,
+  CodeAnnotationType,
+  ConventionalDecoration,
+  ConventionalLabel,
+  ImageAttachment,
+} from '@plannotator/shared/code-annotation';
+
 export enum AnnotationType {
   DELETION = 'DELETION',
   COMMENT = 'COMMENT',
@@ -19,11 +34,6 @@ export type InputMethod = 'drag' | 'pinpoint';
 export type ActionsLabelMode = 'full' | 'short' | 'icon';
 
 export type WideModeType = 'wide' | 'focus';
-
-export interface ImageAttachment {
-  path: string;
-  name: string;
-}
 
 /** DOM-relative text position used to restore a document annotation selection. */
 export interface AnnotationTextMeta {
@@ -108,31 +118,6 @@ export interface DiffResult {
   diffText: string;
 }
 
-// Code Review Types
-export type CodeAnnotationType = 'comment' | 'suggestion' | 'concern';
-// 'general' is a review-level comment tied to no file and no line. For 'general'
-// (and the file-less case) filePath is "" and lineStart/lineEnd are 0 — consumers
-// must branch on scope, never read those sentinels as a real path or row.
-export type CodeAnnotationScope = 'line' | 'file' | 'general';
-
-/** Conventional Comments label — see https://conventionalcomments.org */
-export type ConventionalLabel =
-  | 'praise'
-  | 'nitpick'
-  | 'suggestion'
-  | 'issue'
-  | 'todo'
-  | 'question'
-  | 'thought'
-  | 'chore'
-  | 'note'
-  | 'typo'
-  | 'polish'
-  | (string & {}); // Allow custom labels while preserving autocomplete for built-ins
-
-/** Conventional Comments decoration (parenthesized modifier) */
-export type ConventionalDecoration = 'blocking' | 'non-blocking' | 'if-minor';
-
 /**
  * A note attached to a whole PR comment/review/thread (code-review Phase 2).
  * Button-driven (not text-anchored): the reviewer clicks "Annotate" on a card
@@ -148,51 +133,6 @@ export interface CommentAnnotation {
   createdAt: number;
   prUrl?: string;         // the PR this note belongs to (see Annotation.prUrl)
   artifact?: ArtifactAnnotationMeta; // optional artifact anchor within this source comment
-}
-
-export interface CodeAnnotation {
-  id: string;
-  type: CodeAnnotationType;
-  scope?: CodeAnnotationScope; // Defaults to 'line' for backward compatibility
-  filePath: string;
-  lineStart: number;
-  lineEnd: number;
-  side: 'old' | 'new'; // Maps to 'deletions' | 'additions' in @pierre/diffs
-  text?: string;
-  images?: ImageAttachment[];
-  suggestedCode?: string;
-  originalCode?: string; // Original selected lines for suggestion diff
-  charStart?: number; // Character offset within lineStart (token-level selection)
-  charEnd?: number; // Character offset within lineEnd (token-level selection)
-  tokenText?: string; // Selected token/span text (token-level selection)
-  createdAt: number;
-  author?: string;
-  source?: string; // External tool identifier (e.g., "eslint") — set when annotation comes from external API
-  severity?: 'important' | 'nit' | 'pre_existing'; // Agent review severity (Claude)
-  reasoning?: string; // Validation chain — how the issue was confirmed (Claude)
-  reviewProfileLabel?: string; // Custom review that produced this finding — shown as a tag
-  conventionalLabel?: ConventionalLabel;
-  decorations?: ConventionalDecoration[];
-  prUrl?: string;
-  prNumber?: number;
-  prTitle?: string;
-  prRepo?: string;
-  diffScope?: 'layer' | 'full-stack';
-  /** Set when the annotation was created on a commit:<sha> diff (Commits
-   *  panel). Line numbers anchor to THAT commit's diff-vs-parent — the export
-   *  labels the annotation with its commit when sent from any other diff, so
-   *  the agent never reads historical line numbers against the current diff. */
-  commitSha?: string;
-  /** The commit's one-line subject, captured for readable export labels. */
-  commitSubject?: string;
-  /** GitButler target that supplied this annotation's line coordinates. */
-  gitButlerDiffType?: string;
-  /** Human-readable GitButler target label captured with the annotation. */
-  gitButlerDiffLabel?: string;
-  /** GitButler merge base active when the annotation was created. */
-  gitButlerBase?: string;
-  /** Exact server snapshot that supplied the GitButler line coordinates. */
-  gitButlerSnapshotId?: string;
 }
 
 /** Token-level metadata passed from selection to annotation creation. */

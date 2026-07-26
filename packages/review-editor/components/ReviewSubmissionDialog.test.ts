@@ -1,8 +1,10 @@
 import { describe, expect, test } from 'bun:test';
 import {
   buildPlatformReviewBody,
+  buildReviewSubmission,
   type SubmissionTarget,
 } from './ReviewSubmissionDialog';
+import type { CodeAnnotation } from '@plannotator/ui/types';
 
 const inlineComment: SubmissionTarget['fileComments'][number] = {
   path: 'src/example.ts',
@@ -38,5 +40,35 @@ describe('buildPlatformReviewBody', () => {
       fileComments: [inlineComment],
       fileScopedBody: '',
     })).toBe('');
+  });
+});
+
+describe('buildReviewSubmission', () => {
+  test('routes Atlas source annotations to the review body, never inline comments', () => {
+    const annotation: CodeAnnotation = {
+      id: 'atlas-note',
+      type: 'comment',
+      scope: 'line',
+      filePath: 'src/service.ts',
+      lineStart: 14,
+      lineEnd: 16,
+      side: 'new',
+      text: 'Check every caller before changing this contract.',
+      createdAt: 1,
+      source: 'atlas',
+    };
+
+    const submission = buildReviewSubmission(
+      [annotation],
+      [],
+      'https://github.com/acme/repo/pull/7',
+      new Set(['src/service.ts']),
+    );
+
+    expect(submission.targets).toHaveLength(1);
+    expect(submission.targets[0]?.fileComments).toEqual([]);
+    expect(submission.targets[0]?.fileScopedBody).toContain(
+      '**src/service.ts:14-16 (codebase source):** Check every caller',
+    );
   });
 });
