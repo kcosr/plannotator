@@ -9,6 +9,10 @@ import {
 	type StructuralItem,
 	type StructuralMember,
 } from "./atlas-structure";
+import {
+	classifyRustRepositoryTestRanges,
+	type AtlasTestRange,
+} from "./atlas-test-classification";
 
 const execFileAsync = promisify(execFile);
 
@@ -37,6 +41,7 @@ export interface AtlasSymbol {
 	endLine: number;
 	exported: boolean;
 	complexity: number;
+	isTest: boolean;
 }
 
 export interface AtlasNode {
@@ -52,6 +57,10 @@ export interface AtlasNode {
 	bytes: number;
 	lines: number;
 	complexity: number;
+	testBytes: number;
+	testLines: number;
+	testComplexity: number;
+	testRanges: AtlasTestRange[];
 	symbols: AtlasSymbol[];
 }
 
@@ -81,7 +90,7 @@ export interface AtlasSummary {
 }
 
 export interface AtlasSnapshot {
-	version: 2;
+	version: 3;
 	rootPath: string;
 	rootName: string;
 	rootId: string;
@@ -128,7 +137,7 @@ type FileAnalysis = {
 	extension: string;
 	lines: number;
 	complexity: number;
-	symbols: Omit<AtlasSymbol, "id" | "fileId">[];
+	symbols: Omit<AtlasSymbol, "id" | "fileId" | "isTest">[];
 	imports: ParsedImport[];
 };
 
@@ -356,6 +365,38 @@ function approximateComplexity(content: string, language: string): number {
 				? /\b(?:if|unless|elsif|for|while|until|when|rescue)\b|&&|\|\|/g
 				: /\b(?:if|else\s+if|for|while|case|catch|match)\b|&&|\|\||\?\?/g;
 	return 1 + (source.match(keywords)?.length ?? 0);
+}
+
+function contentLinesWithEndings(content: string): string[] {
+	return content.match(/[^\r\n]*(?:\r\n|\r|\n)|[^\r\n]+$/g) ?? [];
+}
+
+function testMetrics(
+	content: string,
+	language: string,
+	complexity: number,
+	ranges: AtlasTestRange[],
+): { bytes: number; lines: number; complexity: number } {
+	if (ranges.length === 0) return { bytes: 0, lines: 0, complexity: 0 };
+	const sourceLines = contentLinesWithEndings(content);
+	const testSource: string[] = [];
+	let bytes = 0;
+	let lines = 0;
+	for (const range of ranges) {
+		const selected = sourceLines.slice(range.startLine - 1, range.endLine);
+		bytes += Buffer.byteLength(selected.join(""));
+		lines += selected.length;
+		testSource.push(selected.join(""));
+	}
+	return {
+		bytes,
+		lines,
+		complexity: Math.min(complexity, approximateComplexity(testSource.join("\n"), language)),
+	};
+}
+
+function lineIsInRanges(line: number, ranges: AtlasTestRange[]): boolean {
+	return ranges.some((range) => line >= range.startLine && line <= range.endLine);
 }
 
 function symbolKind(
@@ -637,6 +678,10 @@ function createRootNode(rootPath: string): AtlasNode {
 		bytes: 0,
 		lines: 0,
 		complexity: 0,
+		testBytes: 0,
+		testLines: 0,
+		testComplexity: 0,
+		testRanges: [],
 		symbols: [],
 	};
 }
@@ -668,6 +713,10 @@ function ensureDirectoryNodes(
 				bytes: 0,
 				lines: 0,
 				complexity: 0,
+				testBytes: 0,
+				testLines: 0,
+				testComplexity: 0,
+				testRanges: [],
 				symbols: [],
 			};
 			nodesById.set(id, directoryNode);
@@ -691,6 +740,9 @@ function aggregateDirectoryMetrics(nodesById: Map<string, AtlasNode>): void {
 				node.bytes += child.bytes;
 				node.lines += child.lines;
 				node.complexity += child.complexity;
+				node.testBytes += child.testBytes;
+				node.testLines += child.testLines;
+				node.testComplexity += child.testComplexity;
 			}
 		}
 		node.childIds.sort((a, b) => {
@@ -787,6 +839,14 @@ export async function buildAtlasSnapshot(
 		resolvedRoot,
 		acceptedFiles.map((file) => file.path),
 	);
+	const rustTestRanges = classifyRustRepositoryTestRanges(
+		acceptedFiles
+			.filter((file) => languageForPath(file.path)?.language === "rust")
+			.map((file) => ({
+				...file,
+				outline: structure.files.get(file.path),
+			})),
+	);
 
 	for (const accepted of acceptedFiles) {
 		const analysis = analyzeOutline(
@@ -801,10 +861,18 @@ export async function buildAtlasSnapshot(
 
 		const id = nodeId("file", accepted.path);
 		const parentId = ensureDirectoryNodes(accepted.path, rootNode, nodesById);
+		const testRanges = rustTestRanges.get(accepted.path) ?? [];
+		const classifiedTestMetrics = testMetrics(
+			accepted.content,
+			analysis.language,
+			analysis.complexity,
+			testRanges,
+		);
 		const symbols: AtlasSymbol[] = analysis.symbols.map((symbol) => ({
 			...symbol,
 			id: symbolId(id, symbol.kind, symbol.name, symbol.line),
 			fileId: id,
+			isTest: lineIsInRanges(symbol.line, testRanges),
 		}));
 		const fileNode: AtlasNode = {
 			id,
@@ -819,6 +887,10 @@ export async function buildAtlasSnapshot(
 			bytes: accepted.bytes,
 			lines: analysis.lines,
 			complexity: analysis.complexity,
+			testBytes: classifiedTestMetrics.bytes,
+			testLines: classifiedTestMetrics.lines,
+			testComplexity: classifiedTestMetrics.complexity,
+			testRanges,
 			symbols,
 		};
 		nodesById.set(id, fileNode);
@@ -878,7 +950,7 @@ export async function buildAtlasSnapshot(
 	}
 
 	return {
-		version: 2,
+		version: 3,
 		rootPath: resolvedRoot,
 		rootName: rootNode.name,
 		rootId: rootNode.id,
@@ -907,6 +979,8 @@ export async function buildAtlasSnapshot(
 		},
 	};
 }
+
+export type { AtlasTestRange, AtlasTestRangeReason } from "./atlas-test-classification";
 
 export {
 	findAtlasDeclarations,

@@ -122,8 +122,10 @@ plannotator explore ./path/to/repo     # Explore another local repository
 
 Explore opens a local Codebase Atlas with linked Overview, Symbols, and
 read-only Source views. Overview can toggle relationship analysis and its
-dependency inspector without leaving the active treemap. The repository is
-indexed after the local listener starts, and the UI reports scan progress.
+dependency inspector without leaving the active treemap. Rust repositories can
+be filtered with `All`, `No tests`, and `Tests`; mixed files retain their source
+line numbers. The repository is indexed after the local listener starts, and
+the UI reports scan progress.
 
 ### Plan mode
 

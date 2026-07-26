@@ -1,6 +1,8 @@
+import { useMemo } from 'react';
 import { Box, Braces, CircleDot, FunctionSquare, Variable } from 'lucide-react';
+import { codeFilterLabel, symbolMatchesFilter } from './codeFilter';
 import { squarify } from './treemap';
-import type { AtlasNode, AtlasSymbol } from './types';
+import type { AtlasNode, AtlasSymbol, CodeFilter } from './types';
 import { useElementSize } from './useElementSize';
 
 const KIND_COLORS: Record<AtlasSymbol['kind'], string> = {
@@ -25,10 +27,22 @@ function SymbolIcon({ kind }: { kind: AtlasSymbol['kind'] }) {
   return <CircleDot size={13} />;
 }
 
-export function SymbolMap({ file, onOpen }: { file: AtlasNode; onOpen: (symbol: AtlasSymbol) => void }) {
+export function SymbolMap({
+  file,
+  codeFilter,
+  onOpen,
+}: {
+  file: AtlasNode;
+  codeFilter: CodeFilter;
+  onOpen: (symbol: AtlasSymbol) => void;
+}) {
   const { ref, width, height } = useElementSize<HTMLDivElement>();
+  const symbols = useMemo(
+    () => file.symbols.filter((symbol) => symbolMatchesFilter(symbol, codeFilter)),
+    [file.symbols, codeFilter],
+  );
   const rects = squarify(
-    file.symbols.map((symbol) => ({
+    symbols.map((symbol) => ({
       item: symbol,
       id: symbol.id,
       value: Math.max(1, symbol.endLine - symbol.line + 1) * (1 + Math.log2(Math.max(1, symbol.complexity))),
@@ -65,11 +79,11 @@ export function SymbolMap({ file, onOpen }: { file: AtlasNode; onOpen: (symbol: 
           </button>
         );
       })}
-      {file.symbols.length === 0 && (
+      {symbols.length === 0 && (
         <div className="atlas-empty">
           <Braces size={28} />
-          <strong>No indexed symbols</strong>
-          <span>This file can still be inspected in Source.</span>
+          <strong>No indexed {codeFilterLabel(codeFilter)} symbols</strong>
+          <span>Try another code filter or inspect the complete source.</span>
         </div>
       )}
     </div>

@@ -78,7 +78,7 @@ describe("Pi Codebase Atlas server", () => {
 		expect(favicon.headers.get("content-type")).toBe("image/png");
 
 		const snapshot = await waitForSnapshot(server.url);
-		expect(snapshot.version).toBe(2);
+		expect(snapshot.version).toBe(3);
 		expect(snapshot.rootPath).toBe(root);
 		expect((snapshot.summary as { files: number }).files).toBe(2);
 

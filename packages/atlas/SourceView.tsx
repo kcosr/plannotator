@@ -14,8 +14,17 @@ import {
   Search,
 } from 'lucide-react';
 import { fetchReferences, fetchSource } from './api';
+import { lineMatchesFilter, symbolMatchesFilter } from './codeFilter';
 import { referencePositionFromToken } from './referencePosition';
-import type { AtlasAnalyzers, AtlasNode, AtlasSymbol, ReferenceLocation, ReferenceResponse, SourceFile } from './types';
+import type {
+  AtlasAnalyzers,
+  AtlasNode,
+  AtlasSymbol,
+  CodeFilter,
+  ReferenceLocation,
+  ReferenceResponse,
+  SourceFile,
+} from './types';
 
 interface NavigationTarget {
   path: string;
@@ -30,6 +39,7 @@ interface SourceViewProps {
   targetLine?: number;
   targetColumn?: number;
   targetSymbol?: string;
+  codeFilter: CodeFilter;
   onNavigateFile: (target: NavigationTarget) => void;
 }
 
@@ -38,10 +48,29 @@ const PIERRE_SOURCE_CSS = `
   [data-file], [data-code] { height: 100% !important; }
   [data-code] { overflow: auto !important; }
   [data-token] { cursor: pointer; }
+  [data-atlas-filtered-out] { opacity: .2; }
 `;
 
 function locationKey(location: ReferenceLocation) {
   return `${location.filePath}:${location.line}:${location.column}`;
+}
+
+function navigationSelection(
+  node: AtlasNode,
+  line: number,
+  symbolName?: string,
+): SelectedLineRange {
+  const candidates = symbolName
+    ? node.symbols
+      .filter((candidate) => candidate.name === symbolName)
+      .sort((first, second) => (first.endLine - first.line) - (second.endLine - second.line))
+    : [];
+  const symbol = candidates.find((candidate) => line >= candidate.line && line <= candidate.endLine)
+    ?? candidates[0];
+  if (symbol && symbol.kind !== 'module') {
+    return { start: symbol.line, end: symbol.endLine };
+  }
+  return { start: line, end: line };
 }
 
 function ReferenceGroup({
@@ -82,6 +111,7 @@ export function SourceView({
   targetLine,
   targetColumn,
   targetSymbol,
+  codeFilter,
   onNavigateFile,
 }: SourceViewProps) {
   const [source, setSource] = useState<SourceFile | null>(null);
@@ -98,7 +128,10 @@ export function SourceView({
     error?: string;
   } | null>(null);
   const [copied, setCopied] = useState(false);
+  const [navigationHighlight, setNavigationHighlight] = useState<SelectedLineRange | null>(null);
   const hostRef = useRef<HTMLDivElement>(null);
+  const lineFilterRef = useRef({ node, codeFilter });
+  lineFilterRef.current = { node, codeFilter };
 
   useEffect(() => {
     const controller = new AbortController();
@@ -120,21 +153,44 @@ export function SourceView({
     if (!source || !query.trim()) return [];
     const needle = query.toLowerCase();
     return source.content.split('\n').flatMap((line, index) =>
-      line.toLowerCase().includes(needle) ? [index + 1] : [],
+      line.toLowerCase().includes(needle) && lineMatchesFilter(node, index + 1, codeFilter)
+        ? [index + 1]
+        : [],
     );
-  }, [source, query]);
+  }, [source, query, node, codeFilter]);
 
   const scrollToLine = useCallback((line: number) => {
     const container = hostRef.current?.querySelector('diffs-container') as HTMLElement & { shadowRoot: ShadowRoot } | null;
     const lineElement = container?.shadowRoot?.querySelector(`[data-line="${line}"]`) as HTMLElement | null;
-    lineElement?.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    lineElement?.scrollIntoView({ block: 'center', behavior: 'auto' });
   }, []);
+
+  const highlightLocation = useCallback((line: number, symbolName?: string) => {
+    setNavigationHighlight(navigationSelection(node, line, symbolName));
+    scrollToLine(line);
+  }, [node, scrollToLine]);
+
+  const highlightSymbol = useCallback((symbol: AtlasSymbol) => {
+    setNavigationHighlight({
+      start: symbol.line,
+      end: symbol.kind === 'module' ? symbol.line : symbol.endLine,
+    });
+    scrollToLine(symbol.line);
+  }, [scrollToLine]);
 
   useEffect(() => {
     if (!source || !targetLine) return;
+    setNavigationHighlight(navigationSelection(node, targetLine, targetSymbol));
     const timeout = window.setTimeout(() => scrollToLine(targetLine), 180);
     return () => window.clearTimeout(timeout);
-  }, [source, targetLine, scrollToLine]);
+  }, [source, node, targetLine, targetSymbol, scrollToLine]);
+
+  useEffect(() => {
+    if (!navigationHighlight) return;
+    const clearHighlight = () => setNavigationHighlight(null);
+    document.addEventListener('pointerdown', clearHighlight, { capture: true });
+    return () => document.removeEventListener('pointerdown', clearHighlight, { capture: true });
+  }, [navigationHighlight]);
 
   useEffect(() => {
     if (matches.length === 0) return;
@@ -170,18 +226,29 @@ export function SourceView({
     if (position) inspectSymbol(position.symbol, position.line, position.column);
   }, [inspectSymbol]);
 
-  const selectedLines = useMemo<SelectedLineRange | null>(() => {
-    const line = targetLine ?? matches[matchIndex];
-    return line ? { start: line, end: line } : null;
-  }, [targetLine, matches, matchIndex]);
-
   const pierreFile = useMemo(() => source
     ? { name: node.name, contents: source.content }
     : null, [node.name, source]);
 
   const onLineClick = useCallback((props: LineEventBaseProps) => {
-    if (props.lineNumber) scrollToLine(props.lineNumber);
-  }, [scrollToLine]);
+    if (props.lineNumber) setNavigationHighlight(null);
+  }, []);
+
+  const applyLineFilter = useCallback((container: HTMLElement) => {
+    const lines = container.shadowRoot?.querySelectorAll<HTMLElement>('[data-line]');
+    if (!lines) return;
+    const current = lineFilterRef.current;
+    for (const element of lines) {
+      const line = Number(element.dataset.line);
+      if (!Number.isInteger(line)) continue;
+      element.toggleAttribute('data-atlas-filtered-out', !lineMatchesFilter(current.node, line, current.codeFilter));
+    }
+  }, []);
+
+  useEffect(() => {
+    const container = hostRef.current?.querySelector('diffs-container') as HTMLElement | null;
+    if (container) applyLineFilter(container);
+  }, [node, codeFilter, source, applyLineFilter]);
 
   const pierreOptions = useMemo(() => ({
     themeType: 'system' as const,
@@ -191,11 +258,16 @@ export function SourceView({
     lineHoverHighlight: 'line' as const,
     onLineClick,
     onTokenClick,
+    onPostRender: applyLineFilter,
     unsafeCSS: PIERRE_SOURCE_CSS,
-  }), [onLineClick, onTokenClick]);
+  }), [applyLineFilter, onLineClick, onTokenClick]);
 
   const semanticProvider = analyzers.semantic.providers.find(
     (provider) => provider.language.toLowerCase() === node.language?.toLowerCase(),
+  );
+  const visibleSymbols = useMemo(
+    () => node.symbols.filter((symbol) => symbolMatchesFilter(symbol, codeFilter)),
+    [node.symbols, codeFilter],
   );
 
   return (
@@ -227,7 +299,7 @@ export function SourceView({
             onClick={() => {
               const next = (matchIndex - 1 + matches.length) % matches.length;
               setMatchIndex(next);
-              scrollToLine(matches[next]);
+              highlightLocation(matches[next]);
             }}
             title="Previous match"
           ><ArrowLeft size={14} /></button>
@@ -238,7 +310,7 @@ export function SourceView({
             onClick={() => {
               const next = (matchIndex + 1) % matches.length;
               setMatchIndex(next);
-              scrollToLine(matches[next]);
+              highlightLocation(matches[next]);
             }}
             title="Next match"
           ><ArrowRight size={14} /></button>
@@ -263,7 +335,7 @@ export function SourceView({
             <File
               key={node.path}
               file={pierreFile}
-              selectedLines={selectedLines}
+              selectedLines={navigationHighlight}
               className="atlas-pierre-file"
               options={pierreOptions}
             />
@@ -274,7 +346,7 @@ export function SourceView({
         <div className="atlas-inspector-header">
           <Braces size={15} />
           <span>Symbols</span>
-          <span className="atlas-count">{node.symbols.length}</span>
+          <span className="atlas-count">{visibleSymbols.length}</span>
         </div>
         <div
           className={`atlas-semantic-status${semanticProvider?.available ? ' is-ready' : ' is-unavailable'}`}
@@ -287,13 +359,13 @@ export function SourceView({
           </span>
         </div>
         <div className="atlas-symbol-list">
-          {node.symbols.map((symbol: AtlasSymbol) => (
+          {visibleSymbols.map((symbol: AtlasSymbol) => (
             <button
               type="button"
               key={symbol.id}
               className={`atlas-symbol-list-item${referenceState?.symbol === symbol.name ? ' is-active' : ''}`}
               onClick={() => {
-                scrollToLine(symbol.line);
+                highlightSymbol(symbol);
                 inspectSymbol(symbol.name, symbol.line, symbol.column);
               }}
             >
@@ -325,23 +397,33 @@ export function SourceView({
                 <ReferenceGroup
                   title="Definitions"
                   locations={referenceState.result.definitions}
-                  onNavigate={(location) => onNavigateFile({
-                    path: location.filePath,
-                    line: location.line,
-                    column: location.column,
-                    symbol: referenceState.symbol,
-                  })}
+                  onNavigate={(location) => {
+                    if (location.filePath === node.path) {
+                      highlightLocation(location.line, referenceState.symbol);
+                    }
+                    onNavigateFile({
+                      path: location.filePath,
+                      line: location.line,
+                      column: location.column,
+                      symbol: referenceState.symbol,
+                    });
+                  }}
                 />
                 {(referenceState.result.provider.kind === 'lsp' || referenceState.result.references.length > 0) && (
                   <ReferenceGroup
                     title="References"
                     locations={referenceState.result.references}
-                    onNavigate={(location) => onNavigateFile({
-                      path: location.filePath,
-                      line: location.line,
-                      column: location.column,
-                      symbol: referenceState.symbol,
-                    })}
+                    onNavigate={(location) => {
+                      if (location.filePath === node.path) {
+                        highlightLocation(location.line, referenceState.symbol);
+                      }
+                      onNavigateFile({
+                        path: location.filePath,
+                        line: location.line,
+                        column: location.column,
+                        symbol: referenceState.symbol,
+                      });
+                    }}
                   />
                 )}
                 {referenceState.result.definitions.length + referenceState.result.references.length === 0 && (

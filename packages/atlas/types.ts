@@ -1,6 +1,14 @@
 export type AtlasView = 'overview' | 'symbols' | 'source';
 export type SizeMetric = 'lines' | 'bytes' | 'complexity';
 export type ColorMetric = 'language' | 'complexity' | 'size';
+export type CodeFilter = 'all' | 'no-tests' | 'tests';
+
+export interface AtlasTestRange {
+  startLine: number;
+  endLine: number;
+  reason: 'rust-test-attribute' | 'rust-cfg-test' | 'rust-integration-file';
+  confidence: 'semantic' | 'convention';
+}
 
 export interface AtlasSymbol {
   id: string;
@@ -12,6 +20,7 @@ export interface AtlasSymbol {
   endLine: number;
   complexity: number;
   exported: boolean;
+  isTest: boolean;
 }
 
 export interface AtlasNode {
@@ -27,6 +36,10 @@ export interface AtlasNode {
   bytes: number;
   lines: number;
   complexity: number;
+  testBytes: number;
+  testLines: number;
+  testComplexity: number;
+  testRanges: AtlasTestRange[];
   symbols: AtlasSymbol[];
 }
 
@@ -56,7 +69,7 @@ export interface AtlasSummary {
 }
 
 export interface AtlasSnapshot {
-  version: 2;
+  version: 3;
   rootPath: string;
   rootName: string;
   rootId: string;

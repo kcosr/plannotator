@@ -22,6 +22,13 @@ import {
   X,
 } from 'lucide-react';
 import { BlockMap } from './BlockMap';
+import {
+  filteredBytes,
+  filteredComplexity,
+  filteredLines,
+  nodeMatchesFilter,
+  symbolMatchesFilter,
+} from './codeFilter';
 import { DirectoryTree } from './DirectoryTree';
 import { SourceView } from './SourceView';
 import { SymbolMap } from './SymbolMap';
@@ -33,6 +40,7 @@ import type {
   AtlasSnapshot,
   AtlasSymbol,
   AtlasView,
+  CodeFilter,
   ColorMetric,
   SizeMetric,
 } from './types';
@@ -209,20 +217,59 @@ function SegmentedSelect<T extends string>({
   );
 }
 
+function CodeFilterControl({
+  value,
+  onChange,
+}: {
+  value: CodeFilter;
+  onChange: (value: CodeFilter) => void;
+}) {
+  const options: { value: CodeFilter; label: string }[] = [
+    { value: 'all', label: 'All' },
+    { value: 'no-tests', label: 'No tests' },
+    { value: 'tests', label: 'Tests' },
+  ];
+  return (
+    <div
+      className="atlas-code-filter"
+      role="group"
+      aria-label="Rust test code filter"
+      title="Filter using indexed Rust test attributes, cfg(test) scopes, and integration-test files"
+    >
+      {options.map((option) => (
+        <button
+          type="button"
+          key={option.value}
+          className={value === option.value ? 'is-active' : ''}
+          aria-pressed={value === option.value}
+          onClick={() => onChange(option.value)}
+        >
+          {option.label}
+        </button>
+      ))}
+    </div>
+  );
+}
+
 function DetailInspector({
   node,
+  codeFilter,
   dependencies,
   byId,
   onSelect,
 }: {
   node: AtlasNode | null;
+  codeFilter: CodeFilter;
   dependencies: AtlasDependency[];
   byId: Map<string, AtlasNode>;
   onSelect: (node: AtlasNode) => void;
 }) {
   if (!node) return <aside className="atlas-detail-panel"><div className="atlas-inspector-message">Select a block to inspect it.</div></aside>;
   const selectedIds = descendants(node, byId);
-  const symbolCount = [...selectedIds].reduce((count, id) => count + (byId.get(id)?.symbols.length ?? 0), 0);
+  const symbolCount = [...selectedIds].reduce(
+    (count, id) => count + (byId.get(id)?.symbols.filter((symbol) => symbolMatchesFilter(symbol, codeFilter)).length ?? 0),
+    0,
+  );
   const outgoing = dependencies.filter((dependency) => selectedIds.has(dependency.sourceId));
   const incoming = dependencies.filter((dependency) => dependency.targetId != null && selectedIds.has(dependency.targetId));
   const renderDependency = (dependency: AtlasDependency, direction: 'in' | 'out') => {
@@ -253,9 +300,9 @@ function DetailInspector({
         <div><strong>{node.name}</strong><span>{node.path}</span></div>
       </div>
       <dl className="atlas-metric-grid">
-        <div><dt>Lines</dt><dd>{formatNumber(node.lines)}</dd></div>
-        <div><dt>Size</dt><dd>{formatBytes(node.bytes)}</dd></div>
-        <div><dt>Complexity</dt><dd>{formatNumber(node.complexity)}</dd></div>
+        <div><dt>Lines</dt><dd>{formatNumber(filteredLines(node, codeFilter))}</dd></div>
+        <div><dt>Size</dt><dd>{formatBytes(filteredBytes(node, codeFilter))}</dd></div>
+        <div><dt>Complexity</dt><dd>{formatNumber(filteredComplexity(node, codeFilter))}</dd></div>
         <div><dt>Symbols</dt><dd>{formatNumber(symbolCount)}</dd></div>
       </dl>
       <div className="atlas-dependency-section">
@@ -279,6 +326,7 @@ export default function AtlasApp() {
   const [focusedRootId, setFocusedRootId] = useState<string | null>(null);
   const [sizeMetric, setSizeMetric] = useState<SizeMetric>('lines');
   const [colorMetric, setColorMetric] = useState<ColorMetric>('complexity');
+  const [codeFilter, setCodeFilter] = useState<CodeFilter>('all');
   const [relationshipsOpen, setRelationshipsOpen] = useState(false);
   const [query, setQuery] = useState('');
   const [sidebarOpen, setSidebarOpen] = useState(() => !window.matchMedia('(max-width: 620px)').matches);
@@ -294,6 +342,14 @@ export default function AtlasApp() {
   const currentSourceTarget = sourceHistory[sourceHistoryIndex];
   const selectedFile = selectedNode?.kind === 'file' ? selectedNode : undefined;
   const relationshipSelection = selectedNode?.kind === 'root' ? null : selectedNode;
+  const filteredFileCount = nodes.filter(
+    (node) => node.kind === 'file' && nodeMatchesFilter(node, codeFilter),
+  ).length;
+  const filteredLanguageCount = new Set(
+    nodes
+      .filter((node) => node.kind === 'file' && node.language && nodeMatchesFilter(node, codeFilter))
+      .map((node) => node.language),
+  ).size;
 
   useEffect(() => {
     document.documentElement.classList.toggle('light', !dark);
@@ -405,19 +461,20 @@ export default function AtlasApp() {
         <aside className="atlas-sidebar">
           <div className="atlas-sidebar-header">
             <span>Repository</span>
-            <span>{snapshot.summary.files} files</span>
+            <span>{filteredFileCount} files</span>
           </div>
           <DirectoryTree
             nodes={nodes}
+            codeFilter={codeFilter}
             selectedId={selectedId}
             focusedRootId={focusedRoot.id}
             onSelect={navigateNode}
             onFocus={navigateNode}
           />
           <div className="atlas-sidebar-summary">
-            <span>{formatNumber(snapshot.summary.lines)} lines</span>
-            <span>{formatBytes(snapshot.summary.bytes)}</span>
-            <span>{Object.keys(snapshot.summary.languages).length} languages</span>
+            <span>{formatNumber(filteredLines(root, codeFilter))} lines</span>
+            <span>{formatBytes(filteredBytes(root, codeFilter))}</span>
+            <span>{filteredLanguageCount} languages</span>
           </div>
         </aside>
 
@@ -429,6 +486,7 @@ export default function AtlasApp() {
               onClick={() => setSidebarOpen((value) => !value)}
               title={sidebarOpen ? 'Hide repository tree' : 'Show repository tree'}
             >{sidebarOpen ? <PanelLeftClose size={15} /> : <PanelLeftOpen size={15} />}</button>
+            <CodeFilterControl value={codeFilter} onChange={setCodeFilter} />
             {view === 'overview' && (
               <button
                 type="button"
@@ -465,7 +523,7 @@ export default function AtlasApp() {
                 {selectedNode.kind === 'file' ? <FileCode2 size={13} aria-hidden /> : <Columns3 size={13} aria-hidden />}
                 <span>Selected</span>
                 <strong>{selectedNode.path}</strong>
-                <small>{selectedNode.kind} · {formatNumber(selectedNode.lines)} lines</small>
+                <small>{selectedNode.kind} · {formatNumber(filteredLines(selectedNode, codeFilter))} lines</small>
               </div>
             )}
             <div className="atlas-toolbar-spacer" />
@@ -507,6 +565,7 @@ export default function AtlasApp() {
                   <BlockMap
                     nodes={nodes}
                     root={focusedRoot}
+                    codeFilter={codeFilter}
                     sizeMetric={sizeMetric}
                     colorMetric={colorMetric}
                     query={query}
@@ -527,6 +586,7 @@ export default function AtlasApp() {
                 {relationshipsOpen && (
                   <DetailInspector
                     node={relationshipSelection}
+                    codeFilter={codeFilter}
                     dependencies={snapshot.dependencies}
                     byId={byId}
                     onSelect={(node) => setSelectedId(node.id)}
@@ -539,13 +599,14 @@ export default function AtlasApp() {
                 <div className="atlas-symbol-header">
                   <div><FileCode2 size={17} /><strong>{selectedFile.name}</strong><span>{selectedFile.path}</span></div>
                   <dl>
-                    <div><dt>Symbols</dt><dd>{selectedFile.symbols.length}</dd></div>
-                    <div><dt>Complexity</dt><dd>{selectedFile.complexity}</dd></div>
-                    <div><dt>Lines</dt><dd>{selectedFile.lines}</dd></div>
+                    <div><dt>Symbols</dt><dd>{selectedFile.symbols.filter((symbol) => symbolMatchesFilter(symbol, codeFilter)).length}</dd></div>
+                    <div><dt>Complexity</dt><dd>{filteredComplexity(selectedFile, codeFilter)}</dd></div>
+                    <div><dt>Lines</dt><dd>{filteredLines(selectedFile, codeFilter)}</dd></div>
                   </dl>
                 </div>
                 <SymbolMap
                   file={selectedFile}
+                  codeFilter={codeFilter}
                   onOpen={(symbol: AtlasSymbol) => openSource({
                     path: selectedFile.path,
                     line: symbol.line,
@@ -559,6 +620,7 @@ export default function AtlasApp() {
               <SourceView
                 node={selectedFile}
                 analyzers={snapshot.analyzers}
+                codeFilter={codeFilter}
                 targetLine={currentSourceTarget?.path === selectedFile.path ? currentSourceTarget.line : undefined}
                 targetColumn={currentSourceTarget?.path === selectedFile.path ? currentSourceTarget.column : undefined}
                 targetSymbol={currentSourceTarget?.path === selectedFile.path ? currentSourceTarget.symbol : undefined}

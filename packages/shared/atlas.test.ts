@@ -56,7 +56,7 @@ describe("buildAtlasSnapshot", () => {
 		const root = await fixture();
 		const snapshot = await buildAtlasSnapshot(root);
 
-		expect(snapshot.version).toBe(2);
+		expect(snapshot.version).toBe(3);
 		expect(snapshot.analyzers.structural).toEqual(expect.objectContaining({
 			name: "ast-grep",
 			version: expect.any(String),
@@ -148,6 +148,101 @@ describe("buildAtlasSnapshot", () => {
 				expect.objectContaining({ name: "Record", kind: "struct" }),
 				expect.objectContaining({ name: "Runner", kind: "class" }),
 			]));
+	});
+
+	test("classifies and aggregates mixed Rust test code", async () => {
+		const root = await fixture();
+		await mkdir(join(root, "tests"), { recursive: true });
+		await mkdir(join(root, "benches"), { recursive: true });
+		await writeFile(
+			join(root, "src", "lib.rs"),
+			[
+				"pub fn live() -> bool { true }",
+				"",
+				"#[cfg(test)]",
+				"mod tests {",
+				"    fn helper() -> bool { true }",
+				"",
+				"    #[test]",
+				"    fn works() { assert!(helper()); }",
+				"}",
+				"",
+				"#[tokio::test]",
+				"async fn async_test() {}",
+			].join("\n"),
+		);
+		await writeFile(
+			join(root, "tests", "api.rs"),
+			"fn helper() {}\n#[test]\nfn integration_test() {}\n",
+		);
+		await writeFile(join(root, "benches", "throughput.rs"), "fn benchmark_helper() {}\n");
+
+		const snapshot = await buildAtlasSnapshot(root);
+		const library = snapshot.nodes.find((node) => node.path === "src/lib.rs")!;
+		const integration = snapshot.nodes.find((node) => node.path === "tests/api.rs")!;
+		const benchmark = snapshot.nodes.find((node) => node.path === "benches/throughput.rs")!;
+
+		expect(library.testRanges).toEqual([
+			expect.objectContaining({ startLine: 3, endLine: 9, reason: "rust-cfg-test" }),
+			expect.objectContaining({ startLine: 11, endLine: 12, reason: "rust-test-attribute" }),
+		]);
+		expect(library.testLines).toBe(9);
+		expect(library.testBytes).toBeGreaterThan(0);
+		expect(library.testBytes).toBeLessThan(library.bytes);
+		expect(library.symbols.find((symbol) => symbol.name === "live")?.isTest).toBe(false);
+		expect(library.symbols.find((symbol) => symbol.name === "tests")?.isTest).toBe(true);
+		expect(library.symbols.find((symbol) => symbol.name === "helper")?.isTest).toBe(true);
+		expect(library.symbols.find((symbol) => symbol.name === "async_test")?.isTest).toBe(true);
+
+		expect(integration.testLines).toBe(integration.lines);
+		expect(integration.testBytes).toBe(integration.bytes);
+		expect(integration.symbols.every((symbol) => symbol.isTest)).toBe(true);
+		expect(benchmark.testLines).toBe(0);
+		expect(benchmark.symbols.every((symbol) => !symbol.isTest)).toBe(true);
+
+		expect(snapshot.nodes.find((node) => node.id === "root")).toEqual(
+			expect.objectContaining({
+				testLines: library.testLines + integration.testLines,
+				testBytes: library.testBytes + integration.testBytes,
+				testComplexity: library.testComplexity + integration.testComplexity,
+			}),
+		);
+	});
+
+	test("propagates cfg-test status into external Rust modules", async () => {
+		const root = await fixture();
+		await mkdir(join(root, "src", "tests"), { recursive: true });
+		await writeFile(
+			join(root, "src", "lib.rs"),
+			"pub fn live() {}\n#[cfg(test)]\nmod tests;\n",
+		);
+		await writeFile(
+			join(root, "src", "tests.rs"),
+			"fn helper() {}\nmod support;\n",
+		);
+		await writeFile(
+			join(root, "src", "tests", "support.rs"),
+			"fn nested_helper() {}\n",
+		);
+		await writeFile(
+			join(root, "src", "orphan_tests.rs"),
+			"fn not_referenced() {}\n",
+		);
+
+		const snapshot = await buildAtlasSnapshot(root);
+		const library = snapshot.nodes.find((node) => node.path === "src/lib.rs")!;
+		const tests = snapshot.nodes.find((node) => node.path === "src/tests.rs")!;
+		const support = snapshot.nodes.find((node) => node.path === "src/tests/support.rs")!;
+		const orphan = snapshot.nodes.find((node) => node.path === "src/orphan_tests.rs")!;
+
+		expect(library.testLines).toBe(2);
+		expect(tests.testLines).toBe(tests.lines);
+		expect(tests.testBytes).toBe(tests.bytes);
+		expect(tests.symbols.every((symbol) => symbol.isTest)).toBe(true);
+		expect(support.testLines).toBe(support.lines);
+		expect(support.symbols.every((symbol) => symbol.isTest)).toBe(true);
+		expect(orphan.testLines).toBe(0);
+		expect(orphan.symbols.every((symbol) => !symbol.isTest)).toBe(true);
 	});
 });
 

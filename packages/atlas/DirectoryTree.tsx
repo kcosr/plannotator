@@ -1,16 +1,25 @@
 import { useMemo, useState } from 'react';
 import { ChevronRight, FileCode2, Folder, FolderOpen } from 'lucide-react';
-import type { AtlasNode } from './types';
+import { filteredLines, nodeMatchesFilter } from './codeFilter';
+import type { AtlasNode, CodeFilter } from './types';
 
 interface DirectoryTreeProps {
   nodes: AtlasNode[];
+  codeFilter: CodeFilter;
   selectedId: string | null;
   focusedRootId: string;
   onSelect: (node: AtlasNode) => void;
   onFocus: (node: AtlasNode) => void;
 }
 
-export function DirectoryTree({ nodes, selectedId, focusedRootId, onSelect, onFocus }: DirectoryTreeProps) {
+export function DirectoryTree({
+  nodes,
+  codeFilter,
+  selectedId,
+  focusedRootId,
+  onSelect,
+  onFocus,
+}: DirectoryTreeProps) {
   const byId = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
   const root = nodes.find((node) => node.parentId == null) ?? nodes[0];
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
@@ -19,7 +28,7 @@ export function DirectoryTree({ nodes, selectedId, focusedRootId, onSelect, onFo
   const renderNode = (node: AtlasNode, depth: number): React.ReactNode => {
     const children = node.childIds
       .map((id) => byId.get(id))
-      .filter((entry): entry is AtlasNode => Boolean(entry))
+      .filter((entry): entry is AtlasNode => entry != null && nodeMatchesFilter(entry, codeFilter))
       .sort((a, b) => Number(a.kind === 'file') - Number(b.kind === 'file') || a.name.localeCompare(b.name));
     const isCollapsed = collapsed.has(node.id);
     const isDirectory = node.kind !== 'file';
@@ -56,7 +65,7 @@ export function DirectoryTree({ nodes, selectedId, focusedRootId, onSelect, onFo
             ? <FileCode2 size={14} />
             : isCollapsed ? <Folder size={14} /> : <FolderOpen size={14} />}
           <span className="atlas-tree-name">{node.name}</span>
-          {node.kind === 'file' && <span className="atlas-tree-lines">{node.lines}</span>}
+          {node.kind === 'file' && <span className="atlas-tree-lines">{filteredLines(node, codeFilter)}</span>}
         </div>
         {isDirectory && !isCollapsed && children.map((child) => renderNode(child, depth + 1))}
       </div>

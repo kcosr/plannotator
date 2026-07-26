@@ -13,12 +13,17 @@ Codebase Atlas uses two deliberately separate analysis layers:
 2. Language Server Protocol clients provide on-demand definitions and
    references. A server is started only when a user requests semantic
    navigation for its language, then reused for the Atlas session.
+3. Rust test classification combines ast-grep item ranges with `#[test]`,
+   test-runner attributes, test-required `#[cfg(...)]` predicates, and Cargo
+   `tests/` path conventions. Classification is stored as exact source ranges
+   so mixed files can be filtered without changing source coordinates.
 
-The snapshot contract is version 2 and records the structural analyzer version,
-source, parsed languages, and per-language LSP availability. Reference responses
-identify whether their result came from an LSP or from indexed syntax. When an
-LSP is unavailable, Atlas may return indexed declarations, but it must not label
-text matches as semantic references.
+The snapshot contract is version 3 and records the structural analyzer version,
+source, parsed languages, per-language LSP availability, and required test
+metrics on every node and symbol. Reference responses identify whether their
+result came from an LSP or from indexed syntax. When an LSP is unavailable,
+Atlas may return indexed declarations, but it must not label text matches as
+semantic references.
 
 ## Distribution
 

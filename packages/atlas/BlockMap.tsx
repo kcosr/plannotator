@@ -1,8 +1,15 @@
 import { memo, useMemo } from 'react';
 import { FileCode2, Folder } from 'lucide-react';
 import { squarify } from './treemap';
+import {
+  codeFilterLabel,
+  filteredComplexity,
+  filteredLines,
+  filteredMetric,
+  nodeMatchesFilter,
+} from './codeFilter';
 import { formatBytes, formatNumber } from './format';
-import type { AtlasNode, ColorMetric, SizeMetric } from './types';
+import type { AtlasNode, CodeFilter, ColorMetric, SizeMetric } from './types';
 import { useElementSize } from './useElementSize';
 
 const LANGUAGE_COLORS: Record<string, string> = {
@@ -23,15 +30,13 @@ const LANGUAGE_COLORS: Record<string, string> = {
   unknown: '#64748b',
 };
 
-function metricValue(node: AtlasNode, metric: SizeMetric): number {
-  if (metric === 'bytes') return Math.max(1, node.bytes);
-  if (metric === 'complexity') return Math.max(1, node.complexity);
-  return Math.max(1, node.lines);
+function metricValue(node: AtlasNode, filter: CodeFilter, metric: SizeMetric): number {
+  return Math.max(1, filteredMetric(node, filter, metric));
 }
 
-function nodeColor(node: AtlasNode, metric: ColorMetric, max: number): string {
+function nodeColor(node: AtlasNode, filter: CodeFilter, metric: ColorMetric, max: number): string {
   if (metric === 'language') return LANGUAGE_COLORS[(node.language ?? 'unknown').toLowerCase()] ?? '#64748b';
-  const value = metric === 'complexity' ? node.complexity : node.lines;
+  const value = metric === 'complexity' ? filteredComplexity(node, filter) : filteredLines(node, filter);
   const ratio = Math.min(1, Math.sqrt(value / Math.max(1, max)));
   if (metric === 'complexity') {
     if (ratio <= 0.5) {
@@ -66,6 +71,7 @@ type Relationship = 'selected' | 'incoming' | 'outgoing' | 'both' | 'unrelated' 
 interface BlockMapProps {
   nodes: AtlasNode[];
   root: AtlasNode;
+  codeFilter: CodeFilter;
   sizeMetric: SizeMetric;
   colorMetric: ColorMetric;
   query: string;
@@ -88,6 +94,7 @@ interface RenderBlock {
 function createBlocks(
   parent: AtlasNode,
   byId: Map<string, AtlasNode>,
+  filter: CodeFilter,
   metric: SizeMetric,
   width: number,
   height: number,
@@ -95,9 +102,11 @@ function createBlocks(
   offsetX = 0,
   offsetY = 0,
 ): RenderBlock[] {
-  const children = parent.childIds.map((id) => byId.get(id)).filter((node): node is AtlasNode => Boolean(node));
+  const children = parent.childIds
+    .map((id) => byId.get(id))
+    .filter((node): node is AtlasNode => node != null && nodeMatchesFilter(node, filter));
   const rects = squarify(
-    children.map((node) => ({ item: node, id: node.id, value: metricValue(node, metric) })),
+    children.map((node) => ({ item: node, id: node.id, value: metricValue(node, filter, metric) })),
     width,
     height,
   );
@@ -118,6 +127,7 @@ function createBlocks(
       blocks.push(...createBlocks(
         rect.item,
         byId,
+        filter,
         metric,
         Math.max(0, rect.width - inset * 2),
         Math.max(0, rect.height - header - inset),
@@ -133,6 +143,7 @@ function createBlocks(
 export const BlockMap = memo(function BlockMap({
   nodes,
   root,
+  codeFilter,
   sizeMetric,
   colorMetric,
   query,
@@ -144,28 +155,30 @@ export const BlockMap = memo(function BlockMap({
   const { ref, width, height } = useElementSize<HTMLDivElement>();
   const byId = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
   const blocks = useMemo(
-    () => createBlocks(root, byId, sizeMetric, width, height),
-    [root, byId, sizeMetric, width, height],
+    () => createBlocks(root, byId, codeFilter, sizeMetric, width, height),
+    [root, byId, codeFilter, sizeMetric, width, height],
   );
   const maxColorValueByDepth = useMemo(() => {
     const values = new Map<number, number>();
     for (const block of blocks) {
-      const value = colorMetric === 'complexity' ? block.node.complexity : block.node.lines;
+      const value = colorMetric === 'complexity'
+        ? filteredComplexity(block.node, codeFilter)
+        : filteredLines(block.node, codeFilter);
       values.set(block.depth, Math.max(values.get(block.depth) ?? 1, value));
     }
     return values;
-  }, [blocks, colorMetric]);
+  }, [blocks, codeFilter, colorMetric]);
   const visibleLanguages = useMemo(() => {
     const counts = new Map<string, number>();
     for (const node of nodes) {
-      if (!node.language) continue;
+      if (!node.language || !nodeMatchesFilter(node, codeFilter)) continue;
       counts.set(node.language, (counts.get(node.language) ?? 0) + 1);
     }
     return [...counts]
       .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]))
       .slice(0, 4)
       .map(([language]) => language);
-  }, [nodes]);
+  }, [nodes, codeFilter]);
   const normalizedQuery = query.trim().toLowerCase();
 
   return (
@@ -176,7 +189,9 @@ export const BlockMap = memo(function BlockMap({
         const matches = !normalizedQuery || node.path.toLowerCase().includes(normalizedQuery);
         const relationship = relationships?.get(node.id);
         const dimmed = !matches || relationship === 'unrelated';
-        const value = sizeMetric === 'bytes' ? formatBytes(node.bytes) : formatNumber(metricValue(node, sizeMetric));
+        const rawValue = filteredMetric(node, codeFilter, sizeMetric);
+        const value = sizeMetric === 'bytes' ? formatBytes(rawValue) : formatNumber(rawValue);
+        const lines = filteredLines(node, codeFilter);
         return (
           <button
             type="button"
@@ -190,7 +205,7 @@ export const BlockMap = memo(function BlockMap({
               width: Math.max(0, blockWidth - 2),
               height: Math.max(0, blockHeight - 2),
               zIndex: depth + 1,
-              '--block-color': nodeColor(node, colorMetric, maxColorValueByDepth.get(depth) ?? 1),
+              '--block-color': nodeColor(node, codeFilter, colorMetric, maxColorValueByDepth.get(depth) ?? 1),
             } as React.CSSProperties}
             onClick={(event) => {
               event.stopPropagation();
@@ -200,7 +215,7 @@ export const BlockMap = memo(function BlockMap({
               event.stopPropagation();
               onOpen(node);
             }}
-            title={`${node.path}\n${formatNumber(node.lines)} lines · ${formatBytes(node.bytes)} · complexity ${formatNumber(node.complexity)}`}
+            title={`${node.path}\n${formatNumber(lines)} ${codeFilterLabel(codeFilter)} lines · ${formatBytes(filteredMetric(node, codeFilter, 'bytes'))} · complexity ${formatNumber(filteredComplexity(node, codeFilter))}`}
           >
             {!tiny && (
               <span className="atlas-block__title">
@@ -234,7 +249,15 @@ export const BlockMap = memo(function BlockMap({
           </>
         )}
       </div>
-      {blocks.length === 0 && width > 0 && <div className="atlas-empty">This directory is empty.</div>}
+      {blocks.length === 0 && width > 0 && (
+        <div className="atlas-empty">
+          {codeFilter === 'tests'
+            ? 'No indexed Rust tests in this directory.'
+            : codeFilter === 'no-tests'
+              ? 'This directory contains only indexed Rust tests.'
+              : 'This directory is empty.'}
+        </div>
+      )}
     </div>
   );
 });
