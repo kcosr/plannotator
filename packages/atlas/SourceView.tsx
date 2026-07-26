@@ -56,10 +56,10 @@ const PIERRE_SOURCE_CSS = `
   [data-file], [data-code] { height: 100% !important; }
   [data-code] { overflow: auto !important; }
   [data-char] { cursor: text; }
-  :host(.is-symbol-inspect-mode) [data-atlas-inspectable] {
+  [data-atlas-inspectable] {
     cursor: pointer;
   }
-  :host(.is-symbol-inspect-mode) [data-atlas-inspectable]:hover {
+  [data-atlas-inspectable]:hover {
     background: color-mix(in oklab, #22c55e 16%, transparent);
     outline: 1px solid color-mix(in oklab, #22c55e 48%, transparent);
     border-radius: 2px;
@@ -265,7 +265,6 @@ export function SourceView({
     error?: string;
   }>({ loading: false, result: null });
   const [copied, setCopied] = useState(false);
-  const [symbolInspectModifier, setSymbolInspectModifier] = useState(false);
   const [navigationHighlight, setNavigationHighlight] = useState<NavigationHighlight | null>(null);
   const hostRef = useRef<HTMLDivElement>(null);
   const symbolListRef = useRef<HTMLDivElement>(null);
@@ -364,21 +363,6 @@ export function SourceView({
     setMatchIndex((current) => Math.min(current, matches.length - 1));
   }, [matches.length]);
 
-  useEffect(() => {
-    const updateModifier = (event: KeyboardEvent) => {
-      setSymbolInspectModifier(event.ctrlKey || event.metaKey);
-    };
-    const clearModifier = () => setSymbolInspectModifier(false);
-    document.addEventListener('keydown', updateModifier);
-    document.addEventListener('keyup', updateModifier);
-    window.addEventListener('blur', clearModifier);
-    return () => {
-      document.removeEventListener('keydown', updateModifier);
-      document.removeEventListener('keyup', updateModifier);
-      window.removeEventListener('blur', clearModifier);
-    };
-  }, []);
-
   const inspectSymbol = useCallback((symbol: string, line: number, column: number) => {
     const clean = symbol.trim();
     if (!clean) return;
@@ -450,7 +434,6 @@ export function SourceView({
   }, [referenceState?.symbol]);
 
   const onTokenClick = useCallback((props: TokenEventBase, event: MouseEvent) => {
-    if (!(event.metaKey || event.ctrlKey)) return;
     const position = referencePositionFromToken(props);
     if (!position) return;
     event.preventDefault();
@@ -635,7 +618,7 @@ export function SourceView({
               key={node.path}
               file={pierreFile}
               selectedLines={navigationHighlight?.range ?? null}
-              className={`atlas-pierre-file${symbolInspectModifier ? ' is-symbol-inspect-mode' : ''}`}
+              className="atlas-pierre-file"
               options={pierreOptions}
             />
           )}
