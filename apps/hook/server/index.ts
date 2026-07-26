@@ -1,7 +1,7 @@
 /**
  * Plannotator CLI for Claude Code, Droid, Codex, Gemini CLI, and Copilot CLI
  *
- * Supports thirteen modes:
+ * Supports fourteen modes:
  *
  * 1. Plan Review (default, no args):
  *    - Spawned by Claude/Gemini/Codex hook entrypoints
@@ -17,46 +17,50 @@
  *    - Starts a repository indexer and interactive codebase atlas
  *    - Runs until the browser closes the session or the process receives a signal
  *
- * 4. Annotate (`plannotator annotate <file.md | file.txt>`):
+ * 4. Index (`plannotator index [path]`):
+ *    - Builds and caches a fresh codebase atlas without starting the browser UI
+ *    - Prints the indexed file and symbol counts and cache location
+ *
+ * 5. Annotate (`plannotator annotate <file.md | file.txt>`):
  *    - Triggered by /plannotator-annotate slash command
  *    - Opens any markdown file in the annotation UI
  *    - Outputs structured feedback to stdout
  *
- * 5. Archive (`plannotator archive`):
+ * 6. Archive (`plannotator archive`):
  *    - Opens read-only browser for saved plan decisions
  *    - Lists plans from ~/.plannotator/plans/ with status badges
  *    - Done button closes the browser
  *
- * 6. Sessions (`plannotator sessions`):
+ * 7. Sessions (`plannotator sessions`):
  *    - Lists active Plannotator server sessions
  *    - `--open [N]` reopens a session in the browser
  *    - `--clean` removes stale session files
  *
- * 7. Copilot Plan (`plannotator copilot-plan`):
+ * 8. Copilot Plan (`plannotator copilot-plan`):
  *    - Spawned by preToolUse hook (Copilot CLI)
  *    - Intercepts exit_plan_mode, reads plan.md from session state
  *    - Outputs permissionDecision JSON to stdout
  *
- * 8. Copilot Last (`plannotator copilot-last`):
+ * 9. Copilot Last (`plannotator copilot-last`):
  *    - Annotate the last assistant message from a Copilot CLI session
  *    - Parses events.jsonl from session state
  *
- * 9. Goal Setup (`plannotator setup-goal interview|facts <bundle.json>`):
+ * 10. Goal Setup (`plannotator setup-goal interview|facts <bundle.json>`):
  *    - Opens the bundled question or facts acceptance UI
  *    - Outputs structured JSON for setup-goal workflows
  *
- * 10. OpenCode Plan (`plannotator opencode-plan`):
+ * 11. OpenCode Plan (`plannotator opencode-plan`):
  *    - Internal bridge mode used by the OpenCode plugin CLI fallback
  *    - Reads `{ plan, timeoutSeconds, sharingEnabled, agents }` from stdin
  *    - Outputs structured JSON for the plugin
  *
- * 11. OpenCode Review (`plannotator opencode-review`):
+ * 12. OpenCode Review (`plannotator opencode-review`):
  *    - Internal structured review bridge used by the OpenCode plugin CLI fallback
  *
- * 12. OpenCode Last (`plannotator opencode-annotate-last`):
+ * 13. OpenCode Last (`plannotator opencode-annotate-last`):
  *    - Internal structured last-message annotation bridge for OpenCode
  *
- * 13. Improve Context (`plannotator improve-context`):
+ * 14. Improve Context (`plannotator improve-context`):
  *    - Spawned by PreToolUse hook on EnterPlanMode
  *    - Reads improvement hook file from ~/.plannotator/hooks/
  *    - Returns additionalContext or silently passes through
@@ -84,6 +88,7 @@ import {
   handleAnnotateServerReady,
 } from "@plannotator/server/annotate";
 import {
+  indexAtlasRepository,
   startExploreServer,
   handleExploreServerReady,
 } from "@plannotator/server/explore";
@@ -142,6 +147,7 @@ import {
 import { findCodexRolloutByThreadId, getLatestCodexPlan, getRecentCodexMessages } from "./codex-session";
 import { findCopilotPlanContent, findCopilotSessionForCwd, getRecentCopilotMessages } from "./copilot-session";
 import {
+  formatIndexSuccess,
   formatInteractiveNoArgClarification,
   formatSubcommandHelp,
   formatTopLevelHelp,
@@ -478,6 +484,44 @@ if (args[0] === "sessions") {
   }
   console.error(`\nReopen with: plannotator sessions --open [N]`);
   process.exit(0);
+
+} else if (args[0] === "index") {
+  // ============================================
+  // CODEBASE INDEX MODE
+  // ============================================
+
+  if (args.length > 2) {
+    console.error("Usage: plannotator index [path]");
+    process.exit(1);
+  }
+
+  const requestedRoot = args[1] ?? process.cwd();
+  let rootPath: string;
+  try {
+    rootPath = realpathSync(path.resolve(requestedRoot));
+    if (!statSync(rootPath).isDirectory()) {
+      throw new Error("not a directory");
+    }
+  } catch {
+    console.error(`Index path is not a directory: ${requestedRoot}`);
+    process.exit(1);
+  }
+
+  try {
+    const result = await indexAtlasRepository({ rootPath });
+    console.log(formatIndexSuccess({
+      files: result.snapshot.summary.files,
+      symbols: result.snapshot.summary.symbols,
+      source: result.source,
+      cachePath: result.cachePath,
+    }));
+    process.exit(0);
+  } catch (error) {
+    console.error(
+      `Failed to index ${requestedRoot}: ${error instanceof Error ? error.message : String(error)}`,
+    );
+    process.exit(1);
+  }
 
 } else if (args[0] === "explore") {
   // ============================================

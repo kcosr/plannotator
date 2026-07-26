@@ -71,8 +71,17 @@ button { color: inherit; }
   border-right: 1px solid var(--border); color: var(--muted-foreground); font-size: 10px; white-space: nowrap;
 }
 .atlas-index-status svg { color: #22c55e; }
+.atlas-index-status.is-checking svg, .atlas-index-status.is-indexing svg { color: var(--primary); }
+.atlas-index-status.is-error svg { color: var(--destructive); }
 .atlas-index-status span { max-width: 210px; overflow: hidden; text-overflow: ellipsis; }
 .atlas-index-status time { color: var(--foreground); font-family: var(--font-mono); }
+.atlas-reindex-button {
+  height: 29px; padding: 0 8px; display: inline-flex; align-items: center; gap: 5px;
+  border: 1px solid transparent; border-radius: 5px; background: transparent;
+  color: var(--muted-foreground); cursor: pointer; font-size: 10px; font-weight: 600;
+}
+.atlas-reindex-button:hover:not(:disabled) { background: var(--muted); border-color: var(--border); color: var(--foreground); }
+.atlas-reindex-button:disabled { opacity: .45; cursor: default; }
 .atlas-icon-button {
   appearance: none; width: 29px; height: 29px; flex: 0 0 29px;
   display: inline-grid; place-items: center; border: 1px solid transparent;
@@ -564,6 +573,7 @@ diffs-container { --diffs-dark-bg: var(--background); --diffs-light-bg: var(--ba
   .atlas-view-tabs button { padding: 0 6px; min-width: 0; }
   .atlas-view-tabs button span { font-size: 10px; }
   .atlas-index-status time { display: none; }
+  .atlas-reindex-button span { display: none; }
   .atlas-selection-summary { width: 180px; max-width: 180px; flex: 0 0 180px; }
   .atlas-selection-summary small, .atlas-selection-summary > span { display: none; }
   .atlas-toolbar:has(.atlas-selection-summary) .atlas-breadcrumbs { display: none; }

@@ -19,6 +19,8 @@ import { classifyJavaScriptTestRanges } from "./atlas-test-classification-js";
 
 const execFileAsync = promisify(execFile);
 
+export const ATLAS_SNAPSHOT_VERSION = 3;
+
 export type AtlasNodeKind = "root" | "directory" | "file";
 
 export type AtlasSymbolKind =
@@ -93,7 +95,7 @@ export interface AtlasSummary {
 }
 
 export interface AtlasSnapshot {
-	version: 3;
+	version: typeof ATLAS_SNAPSHOT_VERSION;
 	rootPath: string;
 	rootName: string;
 	rootId: string;
@@ -993,7 +995,7 @@ export async function buildAtlasSnapshot(
 	}
 
 	return {
-		version: 3,
+		version: ATLAS_SNAPSHOT_VERSION,
 		rootPath: resolvedRoot,
 		rootName: rootNode.name,
 		rootId: rootNode.id,

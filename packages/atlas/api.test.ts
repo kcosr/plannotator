@@ -1,5 +1,10 @@
 import { afterEach, describe, expect, test } from 'bun:test';
-import { fetchCallHierarchy, fetchReferences } from './api';
+import {
+  fetchCallHierarchy,
+  fetchReferences,
+  fetchStatus,
+  reindexAtlas,
+} from './api';
 import type { CallHierarchyResponse, ReferenceResponse } from './types';
 
 const originalFetch = globalThis.fetch;
@@ -66,5 +71,39 @@ describe('fetchCallHierarchy', () => {
       line: '42',
       column: '17',
     });
+  });
+});
+
+describe('Atlas index lifecycle', () => {
+  test('reads the background index status contract', async () => {
+    const response = {
+      status: 'indexing' as const,
+      phase: 'checking' as const,
+      hasSnapshot: true,
+      revision: 4,
+      source: 'cache' as const,
+      refreshing: true,
+    };
+    globalThis.fetch = (async (input) => {
+      expect(String(input)).toBe('/api/atlas/status');
+      return Response.json(response);
+    }) as typeof fetch;
+
+    expect(await fetchStatus()).toEqual(response);
+  });
+
+  test('uses the index endpoint for an explicit reindex', async () => {
+    let requestedUrl = '';
+    let requestedMethod = '';
+    globalThis.fetch = (async (input, init) => {
+      requestedUrl = String(input);
+      requestedMethod = init?.method ?? 'GET';
+      return Response.json({ ok: true });
+    }) as typeof fetch;
+
+    await reindexAtlas();
+
+    expect(requestedUrl).toBe('/api/atlas/index');
+    expect(requestedMethod).toBe('POST');
   });
 });

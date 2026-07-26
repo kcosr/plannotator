@@ -73,6 +73,7 @@ describe("Pi Codebase Atlas server", () => {
 		const server = await startExploreServer({
 			rootPath: root,
 			htmlContent: "<!doctype html><title>Atlas fixture</title>",
+			cachePath: join(root, ".atlas.sqlite3"),
 		});
 		activeServers.add(server);
 
@@ -135,6 +136,7 @@ describe("Pi Codebase Atlas server", () => {
 		const server = await startExploreServer({
 			rootPath: root,
 			htmlContent: "<!doctype html>",
+			cachePath: join(root, ".atlas.sqlite3"),
 		});
 		activeServers.add(server);
 		await waitForSnapshot(server.url);
@@ -183,9 +185,12 @@ describe("Pi Codebase Atlas server", () => {
 			error: "API endpoint not found: /api/ai/not-real",
 		});
 
-		const refresh = await fetch(`${server.url}/api/atlas/refresh`, { method: "POST" });
+		const refresh = await fetch(`${server.url}/api/atlas/index`, { method: "POST" });
 		expect(refresh.status).toBe(202);
-		expect(await refresh.json()).toEqual({ status: "indexing" });
+		expect(await refresh.json()).toMatchObject({
+			status: "indexing",
+			refreshing: true,
+		});
 	});
 
 	test("releases close waiters when stopped programmatically", async () => {
@@ -195,6 +200,7 @@ describe("Pi Codebase Atlas server", () => {
 		const server = await startExploreServer({
 			rootPath: root,
 			htmlContent: "<!doctype html>",
+			cachePath: join(root, ".atlas.sqlite3"),
 		});
 		activeServers.add(server);
 
@@ -211,6 +217,7 @@ describe("Pi Codebase Atlas server", () => {
 		const server = await startExploreServer({
 			rootPath: root,
 			htmlContent: "<!doctype html>",
+			cachePath: join(root, ".atlas.sqlite3"),
 		});
 		activeServers.add(server);
 

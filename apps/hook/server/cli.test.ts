@@ -1,6 +1,7 @@
 import { describe, expect, test } from "bun:test";
 import {
   formatInteractiveNoArgClarification,
+  formatIndexSuccess,
   formatSubcommandHelp,
   formatTopLevelHelp,
   formatVersion,
@@ -27,6 +28,7 @@ describe("CLI top-level help", () => {
     expect(output).toContain("plannotator [--browser <name>]");
     expect(output).toContain("plannotator review [--git | --gitbutler] [PR_URL]");
     expect(output).toContain("plannotator explore [path]");
+    expect(output).toContain("plannotator index [path]");
     expect(output).toContain("plannotator annotate <file.md | file.txt | file.html | https://... | folder/>");
     expect(output).toContain("[--markdown] [--no-jina]");
     expect(output).toContain("plannotator annotate-last [--stdin]");
@@ -81,6 +83,7 @@ describe("CLI subcommand help", () => {
       "setup-goal",
       "archive",
       "explore",
+      "index",
       "sessions",
       "improve-context",
     ]) {
@@ -102,6 +105,8 @@ describe("CLI subcommand help", () => {
     expect(formatSubcommandHelp("explore")).toContain(
       "plannotator explore [path]",
     );
+    expect(formatSubcommandHelp("index")).toContain("plannotator index [path]");
+    expect(formatSubcommandHelp("index")).toContain("fresh codebase atlas");
     expect(formatSubcommandHelp("review")).toContain("--gitbutler");
     expect(formatSubcommandHelp("review")).toContain("PR_URL");
     expect(formatSubcommandHelp("annotate")).toContain("--no-jina");
@@ -125,6 +130,19 @@ describe("CLI --version", () => {
   });
 });
 
+describe("CLI index result", () => {
+  test("formats one concise result line with counts, source, and cache path", () => {
+    expect(formatIndexSuccess({
+      files: 42,
+      symbols: 317,
+      source: "fresh",
+      cachePath: "/tmp/plannotator/atlas.sqlite",
+    })).toBe(
+      "Indexed 42 files, 317 symbols (fresh); cache: /tmp/plannotator/atlas.sqlite",
+    );
+  });
+});
+
 describe("interactive no-arg invocation", () => {
   test("detects bare interactive invocation only when stdin is a TTY", () => {
     expect(isInteractiveNoArgInvocation([], true)).toBe(true);
@@ -140,6 +158,7 @@ describe("interactive no-arg invocation", () => {
     expect(output).toContain("It expects hook JSON on stdin.");
     expect(output).toContain("plannotator review");
     expect(output).toContain("plannotator explore [path]");
+    expect(output).toContain("plannotator index [path]");
     expect(output).toContain("plannotator setup-goal interview bundle.json --json");
     expect(output).toContain("plannotator sessions");
     expect(output).toContain("Run 'plannotator --help' for top-level usage.");

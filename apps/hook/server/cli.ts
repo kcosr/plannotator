@@ -19,6 +19,15 @@ export function formatVersion(): string {
   return `plannotator ${typeof __CLI_VERSION__ !== "undefined" ? __CLI_VERSION__ : "dev"}`;
 }
 
+export function formatIndexSuccess(result: {
+  files: number;
+  symbols: number;
+  cachePath: string;
+  source: "fresh" | "cache";
+}): string {
+  return `Indexed ${result.files} files, ${result.symbols} symbols (${result.source}); cache: ${result.cachePath}`;
+}
+
 export function isInteractiveNoArgInvocation(
   args: string[],
   stdinIsTTY: boolean | undefined,
@@ -34,6 +43,7 @@ export function formatTopLevelHelp(): string {
     "  plannotator [--browser <name>]",
     "  plannotator review [--git | --gitbutler] [PR_URL]",
     "  plannotator explore [path]",
+    "  plannotator index [path]",
     "  plannotator annotate <file.md | file.txt | file.html | https://... | folder/>  [--markdown] [--no-jina] [--gate] [--json] [--hook]",
     "  plannotator annotate-last [--stdin] [--gate] [--json] [--hook]",
     "  plannotator setup-goal <interview|facts> <bundle.json | -> [--json]",
@@ -64,6 +74,15 @@ const SUBCOMMAND_HELP: Record<string, string> = {
     "",
     "Arguments:",
     "  path          Directory to explore (default: current directory)",
+  ].join("\n"),
+  index: [
+    "Usage:",
+    "  plannotator index [path]",
+    "",
+    "Build and cache a fresh codebase atlas for a directory.",
+    "",
+    "Arguments:",
+    "  path          Directory to index (default: current directory)",
   ].join("\n"),
   review: [
     "Usage:",
@@ -178,6 +197,7 @@ export function formatInteractiveNoArgClarification(): string {
     "For interactive use, try:",
     "  plannotator review",
     "  plannotator explore [path]",
+    "  plannotator index [path]",
     "  plannotator annotate <file.md | file.txt | file.html | https://...>",
     "  plannotator setup-goal interview bundle.json --json",
     "  plannotator last",

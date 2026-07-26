@@ -11,6 +11,10 @@ import {
 	type AtlasSnapshot,
 } from "../generated/atlas.ts";
 import {
+	AtlasIndexSession,
+	type AtlasIndexSessionStatus,
+} from "../generated/atlas-index-session.ts";
+import {
 	AtlasSemanticSession,
 	probeAtlasSemanticCapabilities,
 } from "../generated/atlas-semantic.ts";
@@ -25,7 +29,7 @@ import { handleFavicon } from "./handlers.ts";
 import { html, json, requestUrl } from "./helpers.ts";
 import { isRemoteSession, listenOnPort } from "./network.ts";
 
-export type AtlasIndexStatus = "indexing" | "ready" | "error";
+export type AtlasIndexStatus = AtlasIndexSessionStatus["status"];
 
 export interface ExploreServerResult {
 	port: number;
@@ -51,6 +55,37 @@ export interface AtlasFeedbackAnnotation {
 export interface AtlasFeedbackResult {
 	annotations: AtlasFeedbackAnnotation[];
 	markdown: string;
+}
+
+async function buildIndexedAtlasSnapshot(rootPath: string): Promise<AtlasSnapshot> {
+	const capabilities = await probeAtlasSemanticCapabilities();
+	const semanticProviders: AtlasSemanticProviderCapability[] = Object.values(capabilities)
+		.map((capability) => ({
+			language: capability.language,
+			name: capability.serverId,
+			available: capability.available,
+			...(capability.command && {
+				source: process.env[capability.envVariable]?.trim() ? "env" : "path",
+			}),
+			...(capability.reason && { reason: capability.reason }),
+		}));
+	return buildAtlasSnapshot(rootPath, { semanticProviders });
+}
+
+async function warmAtlasSemantics(
+	semanticSession: AtlasSemanticSession,
+	rootPath: string,
+	snapshot: AtlasSnapshot,
+): Promise<void> {
+	const capabilities = await probeAtlasSemanticCapabilities();
+	const languages = Object.values(capabilities)
+		.filter(
+			(capability) =>
+				capability.available &&
+				Boolean(snapshot.summary.languages[capability.language]),
+		)
+		.map((capability) => capability.language);
+	await semanticSession.warmLanguages(rootPath, languages);
 }
 
 function isWithinDirectory(candidate: string, root: string): boolean {
@@ -197,17 +232,45 @@ async function parseAtlasFeedback(
 export async function startExploreServer(options: {
 	rootPath: string;
 	htmlContent: string;
+	cachePath?: string;
 }): Promise<ExploreServerResult> {
 	const rootPath = realpathSync(resolve(options.rootPath));
 	if (!statSync(rootPath).isDirectory()) {
 		throw new Error(`Explore path is not a directory: ${options.rootPath}`);
 	}
 
-	let status: AtlasIndexStatus = "indexing";
-	let snapshot: AtlasSnapshot | undefined;
-	let indexingError: string | undefined;
-	let activeBuild: Promise<void> | undefined;
+	let stopped = false;
 	const semanticSession = new AtlasSemanticSession();
+	const indexSession = await AtlasIndexSession.open({
+		rootPath,
+		...(options.cachePath && {
+			cacheOptions: { databasePath: options.cachePath },
+		}),
+		buildSnapshot: ({ rootPath: repositoryRoot }) =>
+			buildIndexedAtlasSnapshot(repositoryRoot),
+	});
+	let warmedRevision = -1;
+	const warmCurrentSnapshot = async (): Promise<void> => {
+		if (stopped) return;
+		const status = indexSession.getStatus();
+		const snapshot = indexSession.getSnapshot();
+		if (!snapshot || status.revision === warmedRevision) return;
+		warmedRevision = status.revision;
+		try {
+			await warmAtlasSemantics(semanticSession, rootPath, snapshot);
+		} catch (error) {
+			if (!stopped) {
+				console.warn(
+					"[plannotator] Atlas semantic warmup failed:",
+					error instanceof Error ? error.message : String(error),
+				);
+			}
+		}
+	};
+	const reindex = async (): Promise<void> => {
+		await indexSession.reindex();
+		if (!stopped) await warmCurrentSnapshot();
+	};
 	let aiRuntimePromise: Promise<PiAIRuntime | null> | undefined;
 	const getAIRuntime = (): Promise<PiAIRuntime | null> => {
 		if (!aiRuntimePromise) {
@@ -217,7 +280,6 @@ export async function startExploreServer(options: {
 		}
 		return aiRuntimePromise;
 	};
-	let stopped = false;
 	let closeResolved = false;
 	let feedbackResolved = false;
 	let resolveClose!: () => void;
@@ -244,6 +306,7 @@ export async function startExploreServer(options: {
 	const disposeRuntimes = (): Promise<void> => {
 		if (!disposePromise) {
 			disposePromise = Promise.all([
+				indexSession.dispose(),
 				semanticSession.dispose(),
 				aiRuntimePromise?.then((runtime) => runtime?.dispose()),
 			]).then(() => {});
@@ -251,74 +314,21 @@ export async function startExploreServer(options: {
 		return disposePromise;
 	};
 
-	const beginIndexing = (): Promise<void> => {
-		if (activeBuild) return activeBuild;
-		status = "indexing";
-		indexingError = undefined;
-		activeBuild = Promise.resolve()
-			.then(async () => {
-				const capabilities = await probeAtlasSemanticCapabilities();
-				const semanticProviders: AtlasSemanticProviderCapability[] = Object.values(capabilities)
-					.map((capability) => ({
-						language: capability.language,
-						name: capability.serverId,
-						available: capability.available,
-						...(capability.command && {
-							source: process.env[capability.envVariable]?.trim() ? "env" : "path",
-						}),
-						...(capability.reason && { reason: capability.reason }),
-					}));
-				const nextSnapshot = await buildAtlasSnapshot(rootPath, { semanticProviders });
-				const languages = Object.values(capabilities)
-					.filter(
-						(capability) =>
-							capability.available &&
-							Boolean(nextSnapshot.summary.languages[capability.language]),
-					)
-					.map((capability) => capability.language);
-				await semanticSession.warmLanguages(rootPath, languages);
-				return nextSnapshot;
-			})
-			.then((nextSnapshot) => {
-				if (stopped) return;
-				snapshot = nextSnapshot;
-				status = "ready";
-			})
-			.catch((error: unknown) => {
-				if (stopped) return;
-				snapshot = undefined;
-				status = "error";
-				indexingError = error instanceof Error ? error.message : String(error);
-			})
-			.finally(() => {
-				activeBuild = undefined;
-			});
-		return activeBuild;
-	};
-
 	const server = createServer((req, res) => {
 		void (async () => {
 			const url = requestUrl(req);
 			const method = req.method?.toUpperCase() ?? "GET";
+			const indexStatus = indexSession.getStatus();
+			const snapshot = indexSession.getSnapshot();
 
 			if (method === "GET" && url.pathname === "/api/atlas/status") {
-				json(res, {
-					status,
-					...(indexingError ? { error: indexingError } : {}),
-				});
+				json(res, indexStatus);
 				return;
 			}
 
 			if (method === "GET" && url.pathname === "/api/atlas") {
-				if (status === "error") {
-					json(res, {
-						status,
-						error: indexingError ?? "Repository indexing failed",
-					}, 500);
-					return;
-				}
-				if (status === "indexing" || !snapshot) {
-					json(res, { status: "indexing" }, 202);
+				if (!snapshot) {
+					json(res, indexStatus, indexStatus.status === "error" ? 500 : 202);
 					return;
 				}
 				json(res, snapshot);
@@ -356,15 +366,8 @@ export async function startExploreServer(options: {
 					json(res, { error: "Invalid symbol parameter" }, 400);
 					return;
 				}
-				if (status === "error") {
-					json(res, {
-						status,
-						error: indexingError ?? "Repository indexing failed",
-					}, 500);
-					return;
-				}
-				if (status !== "ready" || !snapshot) {
-					json(res, { status: "indexing" }, 202);
+				if (!snapshot) {
+					json(res, indexStatus, indexStatus.status === "error" ? 500 : 202);
 					return;
 				}
 
@@ -400,15 +403,8 @@ export async function startExploreServer(options: {
 			}
 
 			if (method === "GET" && url.pathname === "/api/atlas/calls") {
-				if (status === "error") {
-					json(res, {
-						status,
-						error: indexingError ?? "Repository indexing failed",
-					}, 500);
-					return;
-				}
-				if (status !== "ready" || !snapshot) {
-					json(res, { status: "indexing" }, 202);
+				if (!snapshot) {
+					json(res, indexStatus, indexStatus.status === "error" ? 500 : 202);
 					return;
 				}
 
@@ -454,9 +450,13 @@ export async function startExploreServer(options: {
 				return;
 			}
 
-			if (method === "POST" && url.pathname === "/api/atlas/refresh") {
-				void beginIndexing();
-				json(res, { status: "indexing" }, 202);
+			if (method === "POST" && url.pathname === "/api/atlas/index") {
+				if (feedbackResolved) {
+					json(res, { error: "Atlas session is already closed" }, 409);
+					return;
+				}
+				void reindex();
+				json(res, indexSession.getStatus(), 202);
 				return;
 			}
 
@@ -522,8 +522,10 @@ export async function startExploreServer(options: {
 	const { port, portSource } = await listenOnPort(server);
 	const isRemote = isRemoteSession();
 
-	// The listener is live before repository analysis begins.
-	void beginIndexing();
+	// The listener is live before repository verification or indexing starts.
+	void warmCurrentSnapshot();
+	indexSession.start();
+	void indexSession.waitUntilIdle().then(warmCurrentSnapshot);
 
 	return {
 		port,

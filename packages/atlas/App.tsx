@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useState } from 'react';
+import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import {
   ArrowLeft,
   ArrowRight,
@@ -42,9 +42,10 @@ import {
   closeAtlas,
   fetchSnapshot,
   fetchStatus,
-  refreshAtlas,
+  reindexAtlas,
   submitAtlasFeedback,
 } from './api';
+import type { AtlasIndexStatus } from './api';
 import { formatAtlasAnnotationSummary, formatAtlasFeedback } from './feedback';
 import { formatBytes, formatNumber } from './format';
 import type {
@@ -137,52 +138,89 @@ function relationshipMap(
 }
 
 function useAtlasData() {
-  const [status, setStatus] = useState<'indexing' | 'ready' | 'error'>('indexing');
+  const [indexStatus, setIndexStatus] = useState<AtlasIndexStatus>({
+    status: 'indexing',
+    phase: 'checking',
+    hasSnapshot: false,
+    revision: -1,
+    refreshing: true,
+  });
   const [snapshot, setSnapshot] = useState<AtlasSnapshot | null>(null);
   const [error, setError] = useState('');
+  const loadedRevision = useRef<number | null>(null);
+
+  const recordError = useCallback((reason: unknown) => {
+    const message = reason instanceof Error ? reason.message : String(reason);
+    setError(message);
+    setIndexStatus((current) => ({
+      ...current,
+      status: 'error',
+      phase: 'error',
+      refreshing: false,
+      error: message,
+    }));
+  }, []);
 
   const load = useCallback(async (signal?: AbortSignal) => {
     const current = await fetchStatus(signal);
     setError(current.error ?? '');
-    if (current.status === 'ready') {
+    setIndexStatus(current);
+    if (current.hasSnapshot && loadedRevision.current !== current.revision) {
       const data = await fetchSnapshot(signal);
+      if (signal?.aborted) return;
+      loadedRevision.current = current.revision;
       setSnapshot(data);
-      setStatus('ready');
-      return;
     }
-    setStatus(current.status);
   }, []);
 
   useEffect(() => {
     const controller = new AbortController();
     load(controller.signal).catch((reason: unknown) => {
-      if (!controller.signal.aborted) {
-        setStatus('error');
-        setError(reason instanceof Error ? reason.message : String(reason));
-      }
+      if (!controller.signal.aborted) recordError(reason);
     });
     return () => controller.abort();
-  }, [load]);
+  }, [load, recordError]);
 
   useEffect(() => {
-    if (status !== 'indexing') return;
-    const interval = window.setInterval(() => {
-      load().catch((reason: unknown) => {
-        setStatus('error');
-        setError(reason instanceof Error ? reason.message : String(reason));
-      });
-    }, 900);
-    return () => window.clearInterval(interval);
-  }, [status, load]);
+    if (
+      !indexStatus.refreshing
+      && (indexStatus.status === 'ready' || indexStatus.status === 'error')
+    ) return;
+    const controller = new AbortController();
+    let timeout: number | undefined;
+    const poll = async () => {
+      try {
+        await load(controller.signal);
+      } catch (reason) {
+        if (!controller.signal.aborted) recordError(reason);
+      }
+      if (!controller.signal.aborted) timeout = window.setTimeout(poll, 900);
+    };
+    timeout = window.setTimeout(poll, 900);
+    return () => {
+      controller.abort();
+      if (timeout !== undefined) window.clearTimeout(timeout);
+    };
+  }, [indexStatus.refreshing, indexStatus.status, load, recordError]);
 
-  const refresh = useCallback(async () => {
-    setStatus('indexing');
+  const reindex = useCallback(async () => {
     setError('');
-    await refreshAtlas();
-    await load();
-  }, [load]);
+    setIndexStatus((current) => ({
+      ...current,
+      status: 'indexing',
+      phase: 'indexing',
+      refreshing: true,
+      error: undefined,
+    }));
+    try {
+      await reindexAtlas();
+      await load();
+    } catch (reason) {
+      recordError(reason);
+    }
+  }, [load, recordError]);
 
-  return { status, snapshot, error, refresh };
+  return { indexStatus, snapshot, error, reindex };
 }
 
 function Breadcrumbs({
@@ -336,7 +374,7 @@ function DetailInspector({
 }
 
 export default function AtlasApp() {
-  const { status, snapshot, error, refresh } = useAtlasData();
+  const { indexStatus, snapshot, error, reindex } = useAtlasData();
   const [view, setView] = useState<AtlasView>('overview');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [focusedRootId, setFocusedRootId] = useState<string | null>(null);
@@ -547,26 +585,47 @@ export default function AtlasApp() {
     );
   }
 
-  if (status === 'error') {
+  if (indexStatus.status === 'error' && !snapshot) {
     return (
       <main className="atlas-state-screen" role="alert">
         <div className="atlas-state-mark atlas-state-mark--error"><CircleAlert size={25} /></div>
         <strong>Atlas could not be built</strong>
         <span>{error || 'The repository indexer stopped unexpectedly.'}</span>
-        <button type="button" className="atlas-primary-button" onClick={() => void refresh()}><RefreshCw size={15} />Try again</button>
+        <button type="button" className="atlas-primary-button" onClick={() => void reindex()}><RefreshCw size={15} />Reindex</button>
       </main>
     );
   }
 
-  if (status === 'indexing' || !snapshot || !root || !focusedRoot) {
+  if (!snapshot || !root || !focusedRoot) {
+    const checking = indexStatus.phase === 'checking';
     return (
       <main className="atlas-state-screen" role="status" aria-live="polite">
         <div className="atlas-state-mark"><LoaderCircle size={25} className="atlas-spin" /></div>
-        <strong>Mapping repository</strong>
-        <span>Indexing files, symbols, and module relationships…</span>
+        <strong>{checking ? 'Checking index' : 'Mapping repository'}</strong>
+        <span>{checking
+          ? 'Looking for an existing repository index…'
+          : 'Indexing files, symbols, and module relationships…'}</span>
       </main>
     );
   }
+
+  const indexIsWorking = indexStatus.phase === 'checking'
+    || indexStatus.phase === 'indexing'
+    || indexStatus.refreshing;
+  const indexStatusLabel = indexStatus.phase === 'error'
+    ? 'Index error'
+    : indexStatus.phase === 'checking'
+      ? 'Cached · checking'
+      : indexStatus.phase === 'indexing' || indexStatus.refreshing
+        ? 'Cached · reindexing'
+        : indexStatus.source === 'cache'
+          ? 'Cached index'
+          : 'Fresh index';
+  const indexStatusTitle = indexStatus.phase === 'error'
+    ? (indexStatus.error || error || 'The repository indexer stopped unexpectedly.')
+    : indexIsWorking
+      ? 'Showing the current index while a background index is prepared'
+      : `Index completed ${new Date(snapshot.generatedAt).toLocaleString()}`;
 
   return (
     <main className="atlas-app">
@@ -593,12 +652,30 @@ export default function AtlasApp() {
           ))}
         </nav>
         <div className="atlas-header-actions">
-          <div className="atlas-index-status" title={`Index completed ${new Date(snapshot.generatedAt).toLocaleString()}`}>
-            <CircleCheck size={13} aria-hidden />
-            <span>Indexed · {snapshot.analyzers.structural.name} {snapshot.analyzers.structural.version}</span>
+          <div
+            className={`atlas-index-status is-${indexStatus.phase}`}
+            title={indexStatusTitle}
+            role="status"
+            aria-live="polite"
+          >
+            {indexStatus.phase === 'error'
+              ? <CircleAlert size={13} aria-hidden />
+              : indexIsWorking
+                ? <LoaderCircle size={13} className="atlas-spin" aria-hidden />
+                : <CircleCheck size={13} aria-hidden />}
+            <span>{indexStatusLabel} · {snapshot.analyzers.structural.name} {snapshot.analyzers.structural.version}</span>
             <time dateTime={snapshot.generatedAt}>{formatIndexedAt(snapshot.generatedAt)}</time>
           </div>
-          <button type="button" className="atlas-icon-button" title="Refresh index" onClick={() => void refresh()}><RefreshCw size={15} /></button>
+          <button
+            type="button"
+            className="atlas-reindex-button"
+            title="Rebuild repository index"
+            disabled={indexIsWorking}
+            onClick={() => void reindex()}
+          >
+            <RefreshCw size={14} />
+            <span>Reindex</span>
+          </button>
           <button
             type="button"
             className={`atlas-icon-button${aiOpen ? ' is-active' : ''}`}

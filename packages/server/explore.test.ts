@@ -1,8 +1,8 @@
 import { afterEach, beforeEach, describe, expect, test } from "bun:test";
-import { symlinkSync, writeFileSync } from "node:fs";
+import { existsSync, symlinkSync, writeFileSync } from "node:fs";
 import { basename, join } from "node:path";
 import { createTestEnvironment } from "../../tests/helpers/environment";
-import { startExploreServer } from "./explore";
+import { indexAtlasRepository, startExploreServer } from "./explore";
 
 const environment = createTestEnvironment(
   ["PLANNOTATOR_PORT", "PLANNOTATOR_REMOTE", "PLANNOTATOR_AI"],
@@ -55,6 +55,7 @@ describe("explore server", () => {
     const server = await startExploreServer({
       rootPath: root,
       htmlContent: SPA_HTML,
+      cachePath: join(environment.makeTempDir(), "atlas.sqlite3"),
       onReady: (url, isRemote, port) => {
         ready = { url, isRemote, port };
       },
@@ -184,11 +185,14 @@ describe("explore server", () => {
       expect(spaResponse.headers.get("content-type")).toContain("text/html");
       expect(await spaResponse.text()).toBe(SPA_HTML);
 
-      const refreshResponse = await fetch(`${server.url}/api/atlas/refresh`, {
+      const refreshResponse = await fetch(`${server.url}/api/atlas/index`, {
         method: "POST",
       });
       expect(refreshResponse.status).toBe(202);
-      expect(await refreshResponse.json()).toEqual({ status: "indexing" });
+      expect(await refreshResponse.json()).toMatchObject({
+        status: "indexing",
+        refreshing: true,
+      });
       await waitForReady(server.url);
 
       let closed = false;
@@ -214,6 +218,7 @@ describe("explore server", () => {
     const server = await startExploreServer({
       rootPath: root,
       htmlContent: SPA_HTML,
+      cachePath: join(environment.makeTempDir(), "atlas.sqlite3"),
     });
 
     let closed = false;
@@ -227,6 +232,43 @@ describe("explore server", () => {
     await expect(server.waitForFeedback()).resolves.toBeNull();
   });
 
+  test("manual indexing writes a snapshot that a server hydrates immediately", async () => {
+    const root = environment.makeTempDir();
+    const cachePath = join(environment.makeTempDir(), "atlas.sqlite3");
+    writeFileSync(join(root, "index.ts"), "export const cached = true;\n");
+
+    const indexed = await indexAtlasRepository({ rootPath: root, cachePath });
+    expect(indexed.source).toBe("fresh");
+    expect(indexed.snapshot.summary.files).toBe(1);
+    expect(indexed.snapshot.summary.symbols).toBe(1);
+    expect(existsSync(cachePath)).toBe(true);
+
+    const server = await startExploreServer({
+      rootPath: root,
+      htmlContent: SPA_HTML,
+      cachePath,
+    });
+    try {
+      const status = await fetch(`${server.url}/api/atlas/status`).then(
+        (response) => response.json() as Promise<{
+          hasSnapshot: boolean;
+          source?: string;
+        }>,
+      );
+      expect(status.hasSnapshot).toBe(true);
+      expect(status.source).toBe("cache");
+
+      const snapshot = await fetch(`${server.url}/api/atlas`);
+      expect(snapshot.status).toBe(200);
+      expect((await snapshot.json() as { generatedAt: string }).generatedAt)
+        .toBe(indexed.snapshot.generatedAt);
+
+      await fetch(`${server.url}/api/atlas/close`, { method: "POST" });
+    } finally {
+      server.stop();
+    }
+  });
+
   test("validates and returns submitted Atlas feedback", async () => {
     const root = environment.makeTempDir();
     writeFileSync(join(root, "index.ts"), [
@@ -238,6 +280,7 @@ describe("explore server", () => {
     const server = await startExploreServer({
       rootPath: root,
       htmlContent: SPA_HTML,
+      cachePath: join(environment.makeTempDir(), "atlas.sqlite3"),
     });
 
     const invalid = await fetch(`${server.url}/api/atlas/feedback`, {

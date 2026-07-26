@@ -6,6 +6,16 @@ import type {
   SourceFile,
 } from './types';
 
+export interface AtlasIndexStatus {
+  status: 'indexing' | 'ready' | 'error';
+  phase: 'checking' | 'indexing' | 'ready' | 'error';
+  hasSnapshot: boolean;
+  revision: number;
+  source?: 'cache' | 'fresh';
+  refreshing: boolean;
+  error?: string;
+}
+
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, { cache: 'no-store', ...init });
   if (!response.ok) {
@@ -22,7 +32,7 @@ async function request<T>(url: string, init?: RequestInit): Promise<T> {
 }
 
 export function fetchStatus(signal?: AbortSignal) {
-  return request<{ status: 'indexing' | 'ready' | 'error'; error?: string }>('/api/atlas/status', { signal });
+  return request<AtlasIndexStatus>('/api/atlas/status', { signal });
 }
 
 export function fetchSnapshot(signal?: AbortSignal) {
@@ -69,8 +79,8 @@ export function fetchCallHierarchy(
   );
 }
 
-export function refreshAtlas() {
-  return request<{ status?: string; ok?: boolean }>('/api/atlas/refresh', { method: 'POST' });
+export function reindexAtlas() {
+  return request<AtlasIndexStatus>('/api/atlas/index', { method: 'POST' });
 }
 
 export function closeAtlas() {
