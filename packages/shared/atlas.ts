@@ -985,6 +985,7 @@ export type { AtlasTestRange, AtlasTestRangeReason } from "./atlas-test-classifi
 export {
 	findAtlasDeclarations,
 	readAtlasSource,
+	resolveAtlasCallHierarchy,
 	resolveAtlasReferences,
 	resolveAtlasSourcePath,
 	validateAtlasRelativePath,
@@ -993,6 +994,10 @@ export type {
 	AtlasReference,
 	AtlasReferenceProvider,
 	AtlasReferenceResponse,
+	AtlasCallHierarchyLocation,
+	AtlasCallHierarchyProvider,
+	AtlasCallHierarchyResponse,
+	AtlasCallHierarchyTarget,
 	AtlasSourceFile,
 	SearchAtlasReferencesOptions,
 } from "./atlas-source";

@@ -6,6 +6,7 @@ import {
   ArrowRight,
   Braces,
   ChevronDown,
+  CornerDownRight,
   CircleCheck,
   CircleSlash,
   Copy,
@@ -13,13 +14,17 @@ import {
   LocateFixed,
   Search,
 } from 'lucide-react';
-import { fetchReferences, fetchSource } from './api';
+import { fetchCallHierarchy, fetchReferences, fetchSource } from './api';
+import { callLocationKey, filterCallTargets } from './callHierarchy';
 import { lineMatchesFilter, symbolMatchesFilter } from './codeFilter';
 import { referencePositionFromToken } from './referencePosition';
 import type {
   AtlasAnalyzers,
   AtlasNode,
   AtlasSymbol,
+  CallHierarchyLocation,
+  CallHierarchyResponse,
+  CallHierarchyTarget,
   CodeFilter,
   ReferenceLocation,
   ReferenceResponse,
@@ -36,6 +41,7 @@ interface NavigationTarget {
 
 interface SourceViewProps {
   node: AtlasNode;
+  nodes: AtlasNode[];
   analyzers: AtlasAnalyzers;
   targetLine?: number;
   targetColumn?: number;
@@ -127,8 +133,102 @@ function ReferenceGroup({
   );
 }
 
+function CallTargetRow({
+  target,
+  onNavigateDeclaration,
+  onNavigateCallSite,
+}: {
+  target: CallHierarchyTarget;
+  onNavigateDeclaration: (target: CallHierarchyTarget) => void;
+  onNavigateCallSite: (target: CallHierarchyTarget, location: CallHierarchyLocation) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  return (
+    <div className="atlas-call-target">
+      <div className="atlas-call-target-row">
+        <button
+          type="button"
+          className="atlas-call-expand"
+          disabled={target.callSites.length === 0}
+          onClick={() => setOpen((value) => !value)}
+          title={open ? 'Collapse call sites' : 'Expand call sites'}
+          aria-label={open ? 'Collapse call sites' : 'Expand call sites'}
+          aria-expanded={open}
+        >
+          <ChevronDown size={13} className={open ? '' : 'is-collapsed'} />
+        </button>
+        <button
+          type="button"
+          className="atlas-call-declaration"
+          onClick={() => onNavigateDeclaration(target)}
+          title={`Open declaration of ${target.name}`}
+        >
+          <span>{target.name}</span>
+          <small>{target.detail || `${target.declaration.filePath}:${target.declaration.line}`}</small>
+        </button>
+        <span className="atlas-count" title={`${target.callSites.length} call site${target.callSites.length === 1 ? '' : 's'}`}>
+          {target.callSites.length}
+        </span>
+      </div>
+      {open && target.callSites.map((location) => (
+        <button
+          type="button"
+          className="atlas-call-site"
+          key={callLocationKey(location)}
+          onClick={() => onNavigateCallSite(target, location)}
+          title="Open exact call site"
+        >
+          <CornerDownRight size={12} />
+          <span>
+            <strong>{location.filePath}:{location.line}</strong>
+            <code>{location.snippet || `Line ${location.line}`}</code>
+          </span>
+        </button>
+      ))}
+    </div>
+  );
+}
+
+function CallHierarchyGroup({
+  title,
+  targets,
+  onNavigateDeclaration,
+  onNavigateCallSite,
+}: {
+  title: string;
+  targets: CallHierarchyTarget[];
+  onNavigateDeclaration: (target: CallHierarchyTarget) => void;
+  onNavigateCallSite: (target: CallHierarchyTarget, location: CallHierarchyLocation) => void;
+}) {
+  const [open, setOpen] = useState(true);
+  const callSiteCount = targets.reduce((sum, target) => sum + target.callSites.length, 0);
+  return (
+    <section className="atlas-reference-group">
+      <button type="button" className="atlas-reference-heading" onClick={() => setOpen((value) => !value)}>
+        <ChevronDown size={14} className={open ? '' : 'is-collapsed'} />
+        <span>{title}</span>
+        <span className="atlas-count" title={`${callSiteCount} call site${callSiteCount === 1 ? '' : 's'}`}>
+          {targets.length}
+        </span>
+      </button>
+      {open && targets.map((target) => (
+        <CallTargetRow
+          key={`${target.name}:${callLocationKey(target.declaration)}`}
+          target={target}
+          onNavigateDeclaration={onNavigateDeclaration}
+          onNavigateCallSite={onNavigateCallSite}
+        />
+      ))}
+      {open && targets.length === 0 && (
+        <div className="atlas-inspector-message">No {title.toLowerCase()} found.</div>
+      )}
+    </section>
+  );
+}
+
 export function SourceView({
   node,
+  nodes,
   analyzers,
   targetLine,
   targetColumn,
@@ -150,9 +250,16 @@ export function SourceView({
     result: ReferenceResponse | null;
     error?: string;
   } | null>(null);
+  const [inspectorMode, setInspectorMode] = useState<'references' | 'calls'>('references');
+  const [callState, setCallState] = useState<{
+    loading: boolean;
+    result: CallHierarchyResponse | null;
+    error?: string;
+  }>({ loading: false, result: null });
   const [copied, setCopied] = useState(false);
   const [navigationHighlight, setNavigationHighlight] = useState<NavigationHighlight | null>(null);
   const hostRef = useRef<HTMLDivElement>(null);
+  const referenceRequestRef = useRef<AbortController | null>(null);
   const renderStateRef = useRef({ node, codeFilter, navigationHighlight });
   renderStateRef.current = { node, codeFilter, navigationHighlight };
 
@@ -256,19 +363,57 @@ export function SourceView({
   const inspectSymbol = useCallback((symbol: string, line: number, column: number) => {
     const clean = symbol.trim();
     if (!clean) return;
+    referenceRequestRef.current?.abort();
     const controller = new AbortController();
+    referenceRequestRef.current = controller;
     setReferenceState({ symbol: clean, line, column, loading: true, result: null });
+    setCallState({ loading: false, result: null });
     fetchReferences(clean, node.path, line, column, controller.signal)
-      .then((result) => setReferenceState({ symbol: clean, line, column, loading: false, result }))
-      .catch((reason: unknown) => setReferenceState({
-        symbol: clean,
-        line,
-        column,
-        loading: false,
-        result: null,
-        error: reason instanceof Error ? reason.message : String(reason),
-      }));
+      .then((result) => {
+        if (!controller.signal.aborted) {
+          setReferenceState({ symbol: clean, line, column, loading: false, result });
+        }
+      })
+      .catch((reason: unknown) => {
+        if (controller.signal.aborted) return;
+        setReferenceState({
+          symbol: clean,
+          line,
+          column,
+          loading: false,
+          result: null,
+          error: reason instanceof Error ? reason.message : String(reason),
+        });
+      });
   }, [node.path]);
+
+  useEffect(() => () => {
+    referenceRequestRef.current?.abort();
+  }, [node.path]);
+
+  const inspectedSymbol = referenceState?.symbol;
+  const inspectedLine = referenceState?.line;
+  const inspectedColumn = referenceState?.column;
+
+  useEffect(() => {
+    if (inspectorMode !== 'calls' || !inspectedSymbol || !inspectedLine || !inspectedColumn) return;
+    const controller = new AbortController();
+    setCallState({ loading: true, result: null });
+    fetchCallHierarchy(node.path, inspectedLine, inspectedColumn, controller.signal)
+      .then((result) => {
+        if (!controller.signal.aborted) setCallState({ loading: false, result });
+      })
+      .catch((reason: unknown) => {
+        if (!controller.signal.aborted) {
+          setCallState({
+            loading: false,
+            result: null,
+            error: reason instanceof Error ? reason.message : String(reason),
+          });
+        }
+      });
+    return () => controller.abort();
+  }, [inspectorMode, inspectedSymbol, inspectedLine, inspectedColumn, node.path]);
 
   useEffect(() => {
     if (targetSymbol && targetLine && targetColumn) {
@@ -340,6 +485,46 @@ export function SourceView({
     () => node.symbols.filter((symbol) => symbolMatchesFilter(symbol, codeFilter)),
     [node.symbols, codeFilter],
   );
+  const nodesByPath = useMemo(
+    () => new Map(nodes.filter((candidate) => candidate.kind === 'file').map((candidate) => [candidate.path, candidate])),
+    [nodes],
+  );
+  const visibleCallers = useMemo(
+    () => filterCallTargets(callState.result?.callers ?? [], nodesByPath, codeFilter),
+    [callState.result?.callers, nodesByPath, codeFilter],
+  );
+  const visibleCallees = useMemo(
+    () => filterCallTargets(callState.result?.callees ?? [], nodesByPath, codeFilter),
+    [callState.result?.callees, nodesByPath, codeFilter],
+  );
+  const navigateCallDeclaration = useCallback((target: CallHierarchyTarget) => {
+    const location = target.declaration;
+    if (location.filePath === node.path) {
+      highlightLocation(location.line, location.column, 'symbol', target.name);
+    }
+    onNavigateFile({
+      path: location.filePath,
+      line: location.line,
+      column: location.column,
+      symbol: target.name,
+      selection: 'symbol',
+    });
+  }, [highlightLocation, node.path, onNavigateFile]);
+  const navigateCallSite = useCallback((
+    symbol: string,
+    location: CallHierarchyLocation,
+  ) => {
+    if (location.filePath === node.path) {
+      highlightLocation(location.line, location.column, 'line');
+    }
+    onNavigateFile({
+      path: location.filePath,
+      line: location.line,
+      column: location.column,
+      symbol,
+      selection: 'line',
+    });
+  }, [highlightLocation, node.path, onNavigateFile]);
 
   return (
     <div className="atlas-source-layout">
@@ -451,9 +636,33 @@ export function SourceView({
               <LocateFixed size={15} />
               <span title={referenceState.symbol}>{referenceState.symbol}</span>
             </div>
-            {referenceState.loading && <div className="atlas-loading-inline"><span className="atlas-spinner" />Finding references…</div>}
-            {referenceState.error && <div className="atlas-inspector-message">{referenceState.error}</div>}
-            {referenceState.result && (
+            <div className="atlas-inspector-modes" role="tablist" aria-label="Symbol relationships">
+              <button
+                type="button"
+                role="tab"
+                aria-selected={inspectorMode === 'references'}
+                className={inspectorMode === 'references' ? 'is-active' : ''}
+                onClick={() => setInspectorMode('references')}
+              >
+                References
+              </button>
+              <button
+                type="button"
+                role="tab"
+                aria-selected={inspectorMode === 'calls'}
+                className={inspectorMode === 'calls' ? 'is-active' : ''}
+                onClick={() => setInspectorMode('calls')}
+              >
+                Calls
+              </button>
+            </div>
+            {inspectorMode === 'references' && referenceState.loading && (
+              <div className="atlas-loading-inline"><span className="atlas-spinner" />Finding references…</div>
+            )}
+            {inspectorMode === 'references' && referenceState.error && (
+              <div className="atlas-inspector-message">{referenceState.error}</div>
+            )}
+            {inspectorMode === 'references' && referenceState.result && (
               <>
                 <div className={`atlas-reference-provider is-${referenceState.result.provider.status}`}>
                   {referenceState.result.provider.status === 'ready' ? <CircleCheck size={13} /> : <CircleSlash size={13} />}
@@ -506,6 +715,54 @@ export function SourceView({
                 )}
                 {referenceState.result.definitions.length + referenceState.result.references.length === 0 && (
                   <div className="atlas-inspector-message">No indexed locations.</div>
+                )}
+              </>
+            )}
+            {inspectorMode === 'calls' && callState.loading && (
+              <div className="atlas-loading-inline"><span className="atlas-spinner" />Finding calls…</div>
+            )}
+            {inspectorMode === 'calls' && callState.error && (
+              <div className="atlas-inspector-message">{callState.error}</div>
+            )}
+            {inspectorMode === 'calls' && callState.result && (
+              <>
+                <div className={`atlas-reference-provider is-${callState.result.provider.status}`}>
+                  {callState.result.provider.status === 'ready' ? <CircleCheck size={13} /> : <CircleSlash size={13} />}
+                  <span>
+                    <strong>
+                      {callState.result.provider.status === 'ready'
+                        ? 'Call hierarchy'
+                        : callState.result.provider.status === 'unsupported'
+                          ? 'Call hierarchy not supported'
+                          : 'Call hierarchy unavailable'}
+                    </strong>
+                    <small>{callState.result.provider.name}</small>
+                  </span>
+                  {callState.result.provider.message && <p>{callState.result.provider.message}</p>}
+                </div>
+                {callState.result.provider.status === 'ready' && (
+                  <>
+                    <CallHierarchyGroup
+                      title="Callers"
+                      targets={visibleCallers}
+                      onNavigateDeclaration={navigateCallDeclaration}
+                      onNavigateCallSite={(_, location) => navigateCallSite(
+                        callState.result?.root?.name ?? referenceState.symbol,
+                        location,
+                      )}
+                    />
+                    <CallHierarchyGroup
+                      title="Callees"
+                      targets={visibleCallees}
+                      onNavigateDeclaration={navigateCallDeclaration}
+                      onNavigateCallSite={(target, location) => navigateCallSite(target.name, location)}
+                    />
+                    {callState.result.truncated && (
+                      <div className="atlas-inspector-message">
+                        Additional call sites were omitted to keep this view responsive.
+                      </div>
+                    )}
+                  </>
                 )}
               </>
             )}

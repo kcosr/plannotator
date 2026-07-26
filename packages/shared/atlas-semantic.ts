@@ -10,6 +10,7 @@ import {
 } from "node:path";
 import { fileURLToPath, pathToFileURL } from "node:url";
 import {
+	CancellationTokenSource,
 	createMessageConnection,
 	StreamMessageReader,
 	StreamMessageWriter,
@@ -68,6 +69,26 @@ export interface AtlasSemanticLocations {
 	references: AtlasSemanticLocation[];
 }
 
+export interface AtlasSemanticCallHierarchyItem {
+	name: string;
+	kind: number;
+	detail?: string;
+	location: AtlasSemanticLocation;
+	selectionRange: AtlasSemanticRange;
+}
+
+export interface AtlasSemanticCallHierarchyCall {
+	item: AtlasSemanticCallHierarchyItem;
+	fromRanges: AtlasSemanticRange[];
+}
+
+export interface AtlasSemanticCallHierarchy {
+	supported: boolean;
+	root: AtlasSemanticCallHierarchyItem | null;
+	incoming: AtlasSemanticCallHierarchyCall[];
+	outgoing: AtlasSemanticCallHierarchyCall[];
+}
+
 export interface AtlasSemanticProbeOptions {
 	env?: NodeJS.ProcessEnv;
 	timeoutMs?: number;
@@ -109,6 +130,26 @@ type LspLocationLink = {
 	targetSelectionRange?: LspRange;
 };
 
+type LspCallHierarchyItem = {
+	name: string;
+	kind: number;
+	detail?: string;
+	uri: string;
+	range: LspRange;
+	selectionRange: LspRange;
+	data?: unknown;
+};
+
+type LspCallHierarchyIncomingCall = {
+	from: LspCallHierarchyItem;
+	fromRanges: LspRange[];
+};
+
+type LspCallHierarchyOutgoingCall = {
+	to: LspCallHierarchyItem;
+	fromRanges: LspRange[];
+};
+
 type ActiveClient = {
 	key: string;
 	definition: ServerDefinition;
@@ -117,6 +158,7 @@ type ActiveClient = {
 	connection: MessageConnection;
 	processFailure: Promise<Error>;
 	initialized: boolean;
+	callHierarchySupported: boolean;
 	stopping: boolean;
 	stderr: string;
 	queue: Promise<void>;
@@ -498,6 +540,7 @@ function createActiveClient(
 		connection,
 		processFailure,
 		initialized: false,
+		callHierarchySupported: false,
 		stopping: false,
 		stderr: "",
 		queue: Promise.resolve(),
@@ -535,8 +578,34 @@ function createActiveClient(
 		const items = (params as { items?: unknown[] } | null)?.items;
 		return Array.isArray(items) ? items.map(() => null) : [];
 	});
-	connection.onRequest("client/registerCapability", () => null);
-	connection.onRequest("client/unregisterCapability", () => null);
+	connection.onRequest("client/registerCapability", (params: unknown) => {
+		const registrations = (params as {
+			registrations?: Array<{ method?: string }>;
+		} | null)?.registrations;
+		if (
+			Array.isArray(registrations) &&
+			registrations.some(
+				(registration) => registration.method === "textDocument/prepareCallHierarchy",
+			)
+		) {
+			client.callHierarchySupported = true;
+		}
+		return null;
+	});
+	connection.onRequest("client/unregisterCapability", (params: unknown) => {
+		const unregisterations = (params as {
+			unregisterations?: Array<{ method?: string }>;
+		} | null)?.unregisterations;
+		if (
+			Array.isArray(unregisterations) &&
+			unregisterations.some(
+				(registration) => registration.method === "textDocument/prepareCallHierarchy",
+			)
+		) {
+			client.callHierarchySupported = false;
+		}
+		return null;
+	});
 	connection.onRequest("workspace/workspaceFolders", () => [
 		{ uri: pathToFileURL(rootPath).href, name: rootPath.split(sep).at(-1) || rootPath },
 	]);
@@ -558,7 +627,9 @@ function initializeClient(
 	timeoutMs: number,
 ): Promise<void> {
 	const rootUri = pathToFileURL(client.rootPath).href;
-	const initialization = client.connection.sendRequest("initialize", {
+	const initialization = client.connection.sendRequest<{
+		capabilities?: { callHierarchyProvider?: boolean | object };
+	}>("initialize", {
 		processId: process.pid,
 		clientInfo: { name: "Plannotator Codebase Atlas" },
 		rootPath: client.rootPath,
@@ -574,16 +645,20 @@ function initializeClient(
 			textDocument: {
 				definition: { dynamicRegistration: true, linkSupport: true },
 				references: { dynamicRegistration: true },
+				callHierarchy: { dynamicRegistration: true },
 			},
 			window: { workDoneProgress: true },
 		},
 	});
-	return withTimeout(
+	return withTimeout<{
+		capabilities?: { callHierarchyProvider?: boolean | object };
+	}>(
 		guardProcess(client, initialization),
 		`${client.definition.id} initialize`,
 		timeoutMs,
-	).then(() => {
+	).then((result) => {
 		client.initialized = true;
+		client.callHierarchySupported = Boolean(result?.capabilities?.callHierarchyProvider);
 		client.connection.sendNotification("initialized", {});
 	});
 }
@@ -648,6 +723,74 @@ function normalizeLocations(
 			a.filePath.localeCompare(b.filePath) ||
 			a.range.start.line - b.range.start.line ||
 			a.range.start.column - b.range.start.column,
+	);
+}
+
+function rangeFromLsp(range: LspRange): AtlasSemanticRange {
+	return {
+		start: {
+			line: range.start.line + 1,
+			column: range.start.character + 1,
+		},
+		end: {
+			line: range.end.line + 1,
+			column: range.end.character + 1,
+		},
+	};
+}
+
+function callHierarchyItemFromLsp(
+	item: LspCallHierarchyItem,
+	rootPath: string,
+): AtlasSemanticCallHierarchyItem | null {
+	const location = locationFromLsp(
+		{ uri: item.uri, range: item.range },
+		rootPath,
+	);
+	if (!location) return null;
+	return {
+		name: item.name,
+		kind: item.kind,
+		...(item.detail ? { detail: item.detail } : {}),
+		location,
+		selectionRange: rangeFromLsp(item.selectionRange),
+	};
+}
+
+function normalizeCallHierarchyCalls(
+	value: Array<LspCallHierarchyIncomingCall | LspCallHierarchyOutgoingCall> | null,
+	direction: "incoming" | "outgoing",
+	rootPath: string,
+): AtlasSemanticCallHierarchyCall[] {
+	const seen = new Set<string>();
+	const calls: AtlasSemanticCallHierarchyCall[] = [];
+	for (const call of value ?? []) {
+		const rawItem = direction === "incoming"
+			? (call as LspCallHierarchyIncomingCall).from
+			: (call as LspCallHierarchyOutgoingCall).to;
+		const item = callHierarchyItemFromLsp(rawItem, rootPath);
+		if (!item) continue;
+		const fromRanges = call.fromRanges.map(rangeFromLsp);
+		const key = [
+			item.location.filePath,
+			item.selectionRange.start.line,
+			item.selectionRange.start.column,
+			...fromRanges.flatMap((range) => [
+				range.start.line,
+				range.start.column,
+				range.end.line,
+				range.end.column,
+			]),
+		].join(":");
+		if (seen.has(key)) continue;
+		seen.add(key);
+		calls.push({ item, fromRanges });
+	}
+	return calls.sort(
+		(a, b) =>
+			a.item.location.filePath.localeCompare(b.item.location.filePath) ||
+			a.item.selectionRange.start.line - b.item.selectionRange.start.line ||
+			a.item.selectionRange.start.column - b.item.selectionRange.start.column,
 	);
 }
 
@@ -827,6 +970,120 @@ export class AtlasSemanticSession {
 			await queued;
 			return result;
 		} catch (error) {
+			if (this.#clients.delete(client.key)) {
+				await stopClient(client, this.#options.shutdownTimeoutMs);
+			}
+			throw error;
+		}
+	}
+
+	async findCallHierarchy(
+		rootPath: string,
+		filePath: string,
+		line: number,
+		column: number,
+		language: AtlasSemanticLanguage,
+		signal?: AbortSignal,
+	): Promise<AtlasSemanticCallHierarchy> {
+		if (!Number.isInteger(line) || line < 1 || !Number.isInteger(column) || column < 1) {
+			throw new Error("Atlas semantic line and column must be positive 1-based integers");
+		}
+		const source = resolveSourcePath(rootPath, filePath);
+		const client = await this.#clientFor(source.rootPath, language);
+		let result!: AtlasSemanticCallHierarchy;
+		const operation = async (): Promise<void> => {
+			signal?.throwIfAborted();
+			if (!client.callHierarchySupported) {
+				result = {
+					supported: false,
+					root: null,
+					incoming: [],
+					outgoing: [],
+				};
+				return;
+			}
+
+			const uri = pathToFileURL(source.sourcePath).href;
+			client.connection.sendNotification("textDocument/didOpen", {
+				textDocument: {
+					uri,
+					languageId: languageIdForPath(language, source.relativePath),
+					version: 1,
+					text: readFileSync(source.sourcePath, "utf8"),
+				},
+			});
+			const cancellation = new CancellationTokenSource();
+			const cancelRequest = () => cancellation.cancel();
+			signal?.addEventListener("abort", cancelRequest, { once: true });
+			try {
+				signal?.throwIfAborted();
+				const position = { line: line - 1, character: column - 1 };
+				const textDocument = { uri };
+					const prepared = await withTimeout(
+						guardProcess(
+							client,
+							client.connection.sendRequest<LspCallHierarchyItem[] | null>(
+								"textDocument/prepareCallHierarchy",
+								{ textDocument, position },
+								cancellation.token,
+							),
+						),
+						`${client.definition.id} prepare call hierarchy`,
+						this.#options.requestTimeoutMs,
+					);
+					const rawRoot = prepared?.[0];
+				if (!rawRoot) {
+					result = {
+						supported: true,
+						root: null,
+						incoming: [],
+						outgoing: [],
+					};
+						return;
+					}
+
+					signal?.throwIfAborted();
+					const [incoming, outgoing] = await withTimeout(
+					guardProcess(
+						client,
+						Promise.all([
+							client.connection.sendRequest<LspCallHierarchyIncomingCall[] | null>(
+								"callHierarchy/incomingCalls",
+								{ item: rawRoot },
+								cancellation.token,
+							),
+							client.connection.sendRequest<LspCallHierarchyOutgoingCall[] | null>(
+								"callHierarchy/outgoingCalls",
+								{ item: rawRoot },
+								cancellation.token,
+							),
+						]),
+					),
+					`${client.definition.id} call hierarchy lookup`,
+					this.#options.requestTimeoutMs,
+				);
+				result = {
+					supported: true,
+					root: callHierarchyItemFromLsp(rawRoot, source.rootPath),
+					incoming: normalizeCallHierarchyCalls(incoming, "incoming", source.rootPath),
+					outgoing: normalizeCallHierarchyCalls(outgoing, "outgoing", source.rootPath),
+				};
+			} finally {
+				signal?.removeEventListener("abort", cancelRequest);
+				cancellation.dispose();
+				client.connection.sendNotification("textDocument/didClose", {
+					textDocument: { uri },
+				});
+			}
+		};
+
+		const queued = client.queue.then(operation, operation);
+		client.queue = queued.catch(() => {});
+		try {
+			await queued;
+			return result;
+		} catch (error) {
+			if (signal?.aborted) throw error;
 			if (this.#clients.delete(client.key)) {
 				await stopClient(client, this.#options.shutdownTimeoutMs);
 			}

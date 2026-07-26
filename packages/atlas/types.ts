@@ -127,3 +127,32 @@ export interface ReferenceResponse {
     message?: string;
   };
 }
+
+export interface CallHierarchyLocation {
+  fileId: string;
+  filePath: string;
+  line: number;
+  column: number;
+  snippet: string;
+}
+
+export interface CallHierarchyTarget {
+  name: string;
+  kind: number;
+  detail?: string;
+  declaration: CallHierarchyLocation;
+  callSites: CallHierarchyLocation[];
+}
+
+export interface CallHierarchyResponse {
+  root: CallHierarchyTarget | null;
+  callers: CallHierarchyTarget[];
+  callees: CallHierarchyTarget[];
+  truncated: boolean;
+  provider: {
+    kind: 'lsp';
+    name: string;
+    status: 'ready' | 'unsupported' | 'unavailable';
+    message?: string;
+  };
+}

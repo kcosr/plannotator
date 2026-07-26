@@ -5,6 +5,7 @@ import { isAbsolute, relative, resolve, sep } from "node:path";
 import {
 	buildAtlasSnapshot,
 	readAtlasSource,
+	resolveAtlasCallHierarchy,
 	resolveAtlasReferences,
 	type AtlasSemanticProviderCapability,
 	type AtlasSnapshot,
@@ -218,6 +219,61 @@ export async function startExploreServer(options: {
 						column,
 					),
 				);
+				return;
+			}
+
+			if (method === "GET" && url.pathname === "/api/atlas/calls") {
+				if (status === "error") {
+					json(res, {
+						status,
+						error: indexingError ?? "Repository indexing failed",
+					}, 500);
+					return;
+				}
+				if (status !== "ready" || !snapshot) {
+					json(res, { status: "indexing" }, 202);
+					return;
+				}
+
+				const requestedPath = url.searchParams.get("path");
+				if (!requestedPath) {
+					json(res, { error: "Missing path parameter" }, 400);
+					return;
+				}
+				const sourcePath = normalizeSourcePath(rootPath, requestedPath);
+				if (!sourcePath) {
+					json(res, { error: "Source file not found" }, 404);
+					return;
+				}
+				const line = Number(url.searchParams.get("line"));
+				const column = Number(url.searchParams.get("column"));
+				if (!Number.isInteger(line) || line < 1 || !Number.isInteger(column) || column < 1) {
+					json(res, { error: "Line and column must be positive integers" }, 400);
+					return;
+				}
+				const cancellation = new AbortController();
+				const abortRequest = () => cancellation.abort();
+				const abortResponse = () => {
+					if (!res.writableEnded) cancellation.abort();
+				};
+				req.once("aborted", abortRequest);
+				res.once("close", abortResponse);
+				try {
+					const calls = await resolveAtlasCallHierarchy(
+						semanticSession,
+						snapshot,
+						sourcePath,
+						line,
+						column,
+						cancellation.signal,
+					);
+					if (!cancellation.signal.aborted) json(res, calls);
+				} catch (error) {
+					if (!cancellation.signal.aborted) throw error;
+				} finally {
+					req.off("aborted", abortRequest);
+					res.off("close", abortResponse);
+				}
 				return;
 			}
 

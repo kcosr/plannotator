@@ -3,9 +3,11 @@ import { mkdtemp, mkdir, rm, symlink, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { buildAtlasSnapshot } from "./atlas";
+import type { AtlasSemanticSession } from "./atlas-semantic";
 import {
 	findAtlasDeclarations,
 	readAtlasSource,
+	resolveAtlasCallHierarchy,
 	resolveAtlasSourcePath,
 	validateAtlasRelativePath,
 } from "./atlas-source";
@@ -281,5 +283,127 @@ describe("Atlas source helpers", () => {
 		await expect(resolveAtlasSourcePath(root, "src/linked.ts")).rejects.toThrow(
 			"escapes the repository root",
 		);
+	});
+
+	test("groups semantic callers and callees with exact repository call sites", async () => {
+		const root = await fixture();
+		const snapshot = await buildAtlasSnapshot(root, {
+			semanticProviders: [{
+				language: "typescript",
+				name: "typescript-language-server",
+				available: true,
+			}],
+		});
+		const session = {
+			findCallHierarchy: async () => ({
+				supported: true,
+				root: {
+					name: "run",
+					kind: 12,
+					location: {
+						filePath: "src/main.ts",
+						range: {
+							start: { line: 7, column: 1 },
+							end: { line: 7, column: 60 },
+						},
+						external: false,
+					},
+					selectionRange: {
+						start: { line: 7, column: 14 },
+						end: { line: 7, column: 17 },
+					},
+				},
+				incoming: [{
+					item: {
+						name: "double",
+						kind: 12,
+						location: {
+							filePath: "src/math.ts",
+							range: {
+								start: { line: 3, column: 1 },
+								end: { line: 6, column: 2 },
+							},
+							external: false,
+						},
+						selectionRange: {
+							start: { line: 3, column: 17 },
+							end: { line: 3, column: 23 },
+						},
+					},
+					fromRanges: [{
+						start: { line: 5, column: 10 },
+						end: { line: 5, column: 16 },
+					}],
+				}],
+				outgoing: [{
+					item: {
+						name: "double",
+						kind: 12,
+						detail: "(value: number) => number",
+						location: {
+							filePath: "src/math.ts",
+							range: {
+								start: { line: 3, column: 1 },
+								end: { line: 6, column: 2 },
+							},
+							external: false,
+						},
+						selectionRange: {
+							start: { line: 3, column: 17 },
+							end: { line: 3, column: 23 },
+						},
+					},
+					fromRanges: [{
+						start: { line: 7, column: 40 },
+						end: { line: 7, column: 46 },
+					}],
+				}],
+			}),
+		} as unknown as AtlasSemanticSession;
+
+		const result = await resolveAtlasCallHierarchy(
+			session,
+			snapshot,
+			"src/main.ts",
+			7,
+			15,
+		);
+
+			expect(result.provider).toEqual({
+				kind: "lsp",
+				name: "typescript-language-server",
+				status: "ready",
+			});
+			expect(result.truncated).toBe(false);
+		expect(result.root).toEqual(expect.objectContaining({
+			name: "run",
+			declaration: expect.objectContaining({
+				fileId: "file:src/main.ts",
+				filePath: "src/main.ts",
+				line: 7,
+			}),
+			callSites: [],
+		}));
+		expect(result.callers[0]).toEqual(expect.objectContaining({
+			name: "double",
+			declaration: expect.objectContaining({ fileId: "file:src/math.ts", line: 3 }),
+			callSites: [
+				expect.objectContaining({
+					filePath: "src/math.ts",
+					line: 5,
+					snippet: "  return value + value;",
+				}),
+			],
+		}));
+		expect(result.callees[0]).toEqual(expect.objectContaining({
+			name: "double",
+			detail: "(value: number) => number",
+			callSites: [
+				expect.objectContaining({
+					filePath: "src/main.ts",
+					line: 7,
+				}),
+			],
+		}));
 	});
 });

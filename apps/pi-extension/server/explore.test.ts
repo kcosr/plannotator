@@ -104,6 +104,17 @@ describe("Pi Codebase Atlas server", () => {
 		expect(referenceBody.references).toHaveLength(0);
 		expect(referenceBody.provider).toMatchObject({ kind: "syntax", status: "unavailable" });
 
+		const calls = await fetch(
+			`${server.url}/api/atlas/calls?path=${encodeURIComponent("src/main.ts")}&line=2&column=17`,
+		);
+		expect(calls.status).toBe(200);
+		expect(await calls.json()).toMatchObject({
+			root: null,
+			callers: [],
+			callees: [],
+			provider: { kind: "lsp", status: "unavailable" },
+		});
+
 		const closeRequest = fetch(`${server.url}/api/atlas/close`, { method: "POST" });
 		await expect(closeRequest.then((response) => response.json())).resolves.toEqual({ ok: true });
 		await expect(server.waitForClose()).resolves.toBeUndefined();
@@ -134,6 +145,11 @@ describe("Pi Codebase Atlas server", () => {
 			`${server.url}/api/atlas/references?symbol=${encodeURIComponent("greet()")}`,
 		);
 		expect(invalidSymbol.status).toBe(400);
+
+		const invalidCallPosition = await fetch(
+			`${server.url}/api/atlas/calls?path=${encodeURIComponent("src/main.ts")}&line=0&column=1`,
+		);
+		expect(invalidCallPosition.status).toBe(400);
 
 		const missingApi = await fetch(`${server.url}/api/atlas/not-real`);
 		expect(missingApi.status).toBe(404);

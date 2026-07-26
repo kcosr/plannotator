@@ -1,4 +1,9 @@
-import type { AtlasSnapshot, ReferenceResponse, SourceFile } from './types';
+import type {
+  AtlasSnapshot,
+  CallHierarchyResponse,
+  ReferenceResponse,
+  SourceFile,
+} from './types';
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, { cache: 'no-store', ...init });
@@ -42,6 +47,23 @@ export async function fetchReferences(
   });
   return request<ReferenceResponse>(
     `/api/atlas/references?${params}`,
+    { signal },
+  );
+}
+
+export function fetchCallHierarchy(
+  path: string,
+  line: number,
+  column: number,
+  signal?: AbortSignal,
+): Promise<CallHierarchyResponse> {
+  const params = new URLSearchParams({
+    path,
+    line: String(line),
+    column: String(column),
+  });
+  return request<CallHierarchyResponse>(
+    `/api/atlas/calls?${params}`,
     { signal },
   );
 }

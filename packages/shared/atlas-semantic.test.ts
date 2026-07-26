@@ -79,6 +79,24 @@ function location(uri, line, character) {
 	};
 }
 
+function callItem(uri, name, line, character, data) {
+	return {
+		name,
+		kind: 12,
+		detail: name + " detail",
+		uri,
+		range: {
+			start: { line, character: 0 },
+			end: { line: line + 2, character: 1 },
+		},
+		selectionRange: {
+			start: { line, character },
+			end: { line, character: character + name.length },
+		},
+		data,
+	};
+}
+
 function handle(message) {
 	record(message);
 	if (message.method === "initialize" && message.id !== undefined) {
@@ -89,6 +107,7 @@ function handle(message) {
 				capabilities: {
 					definitionProvider: true,
 					referencesProvider: true,
+					callHierarchyProvider: process.env.MOCK_CALL_HIERARCHY !== "0",
 				},
 			},
 		});
@@ -132,6 +151,39 @@ function handle(message) {
 		if (process.env.MOCK_LSP_HANG_LOOKUP === "1") return;
 		const result = location(process.env.MOCK_REFERENCE_URI, 3, 2);
 		send({ jsonrpc: "2.0", id: message.id, result: [result, result] });
+		return;
+	}
+	if (message.method === "textDocument/prepareCallHierarchy" && message.id !== undefined) {
+		if (process.env.MOCK_LSP_HANG_CALLS === "1") return;
+		const result = process.env.MOCK_CALL_ROOT_URI
+			? [callItem(process.env.MOCK_CALL_ROOT_URI, "root", 1, 7, { token: "root-data" })]
+			: null;
+		send({ jsonrpc: "2.0", id: message.id, result });
+		return;
+	}
+	if (message.method === "callHierarchy/incomingCalls" && message.id !== undefined) {
+		if (process.env.MOCK_LSP_HANG_CALLS === "1") return;
+		const from = callItem(process.env.MOCK_CALLER_URI, "caller", 3, 2, { token: "caller-data" });
+		const result = [{
+			from,
+			fromRanges: [
+				{ start: { line: 4, character: 4 }, end: { line: 4, character: 10 } },
+				{ start: { line: 6, character: 4 }, end: { line: 6, character: 10 } },
+			],
+		}];
+		send({ jsonrpc: "2.0", id: message.id, result });
+		return;
+	}
+	if (message.method === "callHierarchy/outgoingCalls" && message.id !== undefined) {
+		if (process.env.MOCK_LSP_HANG_CALLS === "1") return;
+		const to = callItem(process.env.MOCK_CALLEE_URI, "callee", 5, 3, { token: "callee-data" });
+		const call = {
+			to,
+			fromRanges: [
+				{ start: { line: 2, character: 8 }, end: { line: 2, character: 14 } },
+			],
+		};
+		send({ jsonrpc: "2.0", id: message.id, result: [call, call] });
 		return;
 	}
 	if (message.method === "shutdown" && message.id !== undefined) {
@@ -372,6 +424,195 @@ describe("Atlas semantic session", () => {
 		).toBe("cpp");
 	});
 
+	test("returns normalized incoming and outgoing call hierarchy from an advertising LSP", async () => {
+		const bin = temporaryDirectory("atlas-semantic-calls-bin-");
+		const root = temporaryDirectory("atlas-semantic-calls-repo-");
+		const eventsPath = join(root, "events.ndjson");
+		const executable = join(bin, "typescript-language-server");
+		const rootPath = join(root, "src", "root.ts");
+		const callerPath = join(root, "src", "caller.ts");
+		const calleePath = join(root, "src", "callee.ts");
+		mkdirSync(join(root, "src"), { recursive: true });
+		writeFileSync(rootPath, "export function root() {\n  return callee();\n}\n");
+		writeFileSync(callerPath, "export function caller() {\n  root();\n}\n");
+		writeFileSync(calleePath, "export function callee() {}\n");
+		writeExecutable(executable, MOCK_LSP_SOURCE);
+		const env = environmentWithPath(bin);
+		env.MOCK_LSP_EVENTS = eventsPath;
+		env.MOCK_CALL_ROOT_URI = pathToFileURL(rootPath).href;
+		env.MOCK_CALLER_URI = pathToFileURL(callerPath).href;
+		env.MOCK_CALLEE_URI = pathToFileURL(calleePath).href;
+
+		const session = new AtlasSemanticSession({
+			env,
+			timeoutMs: 1_000,
+			initializeTimeoutMs: 2_000,
+			requestTimeoutMs: 2_000,
+		});
+		sessions.add(session);
+
+		const hierarchy = await session.findCallHierarchy(
+			root,
+			"src/root.ts",
+			1,
+			17,
+			"typescript",
+		);
+
+		expect(hierarchy).toEqual({
+			supported: true,
+			root: {
+				name: "root",
+				kind: 12,
+				detail: "root detail",
+				location: {
+					filePath: "src/root.ts",
+					range: {
+						start: { line: 2, column: 1 },
+						end: { line: 4, column: 2 },
+					},
+					external: false,
+				},
+				selectionRange: {
+					start: { line: 2, column: 8 },
+					end: { line: 2, column: 12 },
+				},
+			},
+			incoming: [{
+				item: {
+					name: "caller",
+					kind: 12,
+					detail: "caller detail",
+					location: {
+						filePath: "src/caller.ts",
+						range: {
+							start: { line: 4, column: 1 },
+							end: { line: 6, column: 2 },
+						},
+						external: false,
+					},
+					selectionRange: {
+						start: { line: 4, column: 3 },
+						end: { line: 4, column: 9 },
+					},
+				},
+				fromRanges: [
+					{
+						start: { line: 5, column: 5 },
+						end: { line: 5, column: 11 },
+					},
+					{
+						start: { line: 7, column: 5 },
+						end: { line: 7, column: 11 },
+					},
+				],
+			}],
+			outgoing: [{
+				item: {
+					name: "callee",
+					kind: 12,
+					detail: "callee detail",
+					location: {
+						filePath: "src/callee.ts",
+						range: {
+							start: { line: 6, column: 1 },
+							end: { line: 8, column: 2 },
+						},
+						external: false,
+					},
+					selectionRange: {
+						start: { line: 6, column: 4 },
+						end: { line: 6, column: 10 },
+					},
+				},
+				fromRanges: [{
+					start: { line: 3, column: 9 },
+					end: { line: 3, column: 15 },
+				}],
+			}],
+		});
+
+		const messages = readFileSync(eventsPath, "utf8")
+			.trim()
+			.split("\n")
+			.map((line) => JSON.parse(line) as {
+				method?: string;
+				params?: { item?: { data?: unknown } };
+			});
+		expect(
+			messages.find((message) => message.method === "callHierarchy/incomingCalls")
+				?.params?.item?.data,
+		).toEqual({ token: "root-data" });
+		expect(
+			messages.filter((message) => message.method === "callHierarchy/outgoingCalls"),
+		).toHaveLength(1);
+	});
+
+	test("does not send call requests when the LSP omits call hierarchy capability", async () => {
+		const bin = temporaryDirectory("atlas-semantic-no-calls-bin-");
+		const root = temporaryDirectory("atlas-semantic-no-calls-repo-");
+		const eventsPath = join(root, "events.ndjson");
+		const executable = join(bin, "typescript-language-server");
+		mkdirSync(join(root, "src"), { recursive: true });
+		writeFileSync(join(root, "src", "main.ts"), "export function main() {}\n");
+		writeExecutable(executable, MOCK_LSP_SOURCE);
+		const env = environmentWithPath(bin);
+		env.MOCK_LSP_EVENTS = eventsPath;
+		env.MOCK_CALL_HIERARCHY = "0";
+
+		const session = new AtlasSemanticSession({
+			env,
+			timeoutMs: 1_000,
+			initializeTimeoutMs: 2_000,
+			requestTimeoutMs: 2_000,
+		});
+		sessions.add(session);
+
+		await expect(
+			session.findCallHierarchy(root, "src/main.ts", 1, 17, "typescript"),
+		).resolves.toEqual({
+			supported: false,
+			root: null,
+			incoming: [],
+			outgoing: [],
+		});
+		expect(readFileSync(eventsPath, "utf8")).not.toContain("prepareCallHierarchy");
+	});
+
+	test("skips a queued call lookup after its request is cancelled", async () => {
+		const bin = temporaryDirectory("atlas-semantic-cancelled-calls-bin-");
+		const root = temporaryDirectory("atlas-semantic-cancelled-calls-repo-");
+		const eventsPath = join(root, "events.ndjson");
+		const executable = join(bin, "typescript-language-server");
+		mkdirSync(join(root, "src"), { recursive: true });
+		writeFileSync(join(root, "src", "main.ts"), "export function main() {}\n");
+		writeExecutable(executable, MOCK_LSP_SOURCE);
+		const env = environmentWithPath(bin);
+		env.MOCK_LSP_EVENTS = eventsPath;
+
+		const session = new AtlasSemanticSession({
+			env,
+			timeoutMs: 1_000,
+			initializeTimeoutMs: 2_000,
+			requestTimeoutMs: 2_000,
+		});
+		sessions.add(session);
+		const cancellation = new AbortController();
+		cancellation.abort();
+
+		await expect(
+			session.findCallHierarchy(
+				root,
+				"src/main.ts",
+				1,
+				17,
+				"typescript",
+				cancellation.signal,
+			),
+		).rejects.toBeDefined();
+		expect(readFileSync(eventsPath, "utf8")).not.toContain("prepareCallHierarchy");
+	});
+
 	test("times out a language server that does not answer location requests", async () => {
 		const bin = temporaryDirectory("atlas-semantic-timeout-bin-");
 		const root = temporaryDirectory("atlas-semantic-timeout-repo-");
@@ -392,6 +633,29 @@ describe("Atlas semantic session", () => {
 
 		await expect(
 			session.findLocations(root, "src/use.ts", 1, 1, "typescript"),
+		).rejects.toBeInstanceOf(AtlasSemanticTimeoutError);
+	});
+
+	test("times out a language server that does not answer call hierarchy requests", async () => {
+		const bin = temporaryDirectory("atlas-semantic-call-timeout-bin-");
+		const root = temporaryDirectory("atlas-semantic-call-timeout-repo-");
+		const executable = join(bin, "typescript-language-server");
+		mkdirSync(join(root, "src"), { recursive: true });
+		writeFileSync(join(root, "src", "use.ts"), "function value() {}\n");
+		writeExecutable(executable, MOCK_LSP_SOURCE);
+		const env = environmentWithPath(bin);
+		env.MOCK_LSP_HANG_CALLS = "1";
+
+		const session = new AtlasSemanticSession({
+			env,
+			timeoutMs: 1_000,
+			initializeTimeoutMs: 2_000,
+			requestTimeoutMs: 50,
+		});
+		sessions.add(session);
+
+		await expect(
+			session.findCallHierarchy(root, "src/use.ts", 1, 10, "typescript"),
 		).rejects.toBeInstanceOf(AtlasSemanticTimeoutError);
 	});
 });

@@ -118,6 +118,23 @@ describe("explore server", () => {
         status: "unavailable",
       });
 
+      const callsResponse = await fetch(
+        `${server.url}/api/atlas/calls?path=main.ts&line=1&column=17`,
+      );
+      expect(callsResponse.status).toBe(200);
+      const calls = await callsResponse.json() as {
+        root: unknown;
+        callers: unknown[];
+        callees: unknown[];
+        truncated: boolean;
+        provider: { kind: string; status: string };
+      };
+      expect(Array.isArray(calls.callers)).toBe(true);
+      expect(Array.isArray(calls.callees)).toBe(true);
+      expect(typeof calls.truncated).toBe("boolean");
+      expect(calls.provider.kind).toBe("lsp");
+      expect(["ready", "unsupported", "unavailable"]).toContain(calls.provider.status);
+
       const traversalResponse = await fetch(
         `${server.url}/api/atlas/source?path=${encodeURIComponent("../secret.ts")}`,
       );

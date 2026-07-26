@@ -621,6 +621,7 @@ export default function AtlasApp() {
             {view === 'source' && selectedFile && (
               <SourceView
                 node={selectedFile}
+                nodes={snapshot.nodes}
                 analyzers={snapshot.analyzers}
                 codeFilter={codeFilter}
                 targetLine={currentSourceTarget?.path === selectedFile.path ? currentSourceTarget.line : undefined}

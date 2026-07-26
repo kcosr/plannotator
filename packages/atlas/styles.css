@@ -360,11 +360,21 @@ diffs-container { --diffs-dark-bg: var(--background); --diffs-light-bg: var(--ba
 }
 .atlas-reference-provider > svg { margin-top: 1px; }
 .atlas-reference-provider.is-ready > svg { color: #22c55e; }
-.atlas-reference-provider.is-unavailable > svg { color: var(--warning); }
+.atlas-reference-provider.is-unavailable > svg, .atlas-reference-provider.is-unsupported > svg { color: var(--warning); }
 .atlas-reference-provider > span { min-width: 0; display: flex; flex-direction: column; gap: 1px; }
 .atlas-reference-provider strong { color: var(--foreground); font-size: 10px; font-weight: 600; }
 .atlas-reference-provider small { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font: 9px var(--font-mono); }
 .atlas-reference-provider p { grid-column: 2; margin: 1px 0 0; font-size: 9px; line-height: 1.4; overflow-wrap: anywhere; }
+.atlas-inspector-modes {
+  height: 33px; padding: 4px; display: grid; grid-template-columns: 1fr 1fr; gap: 2px;
+  border-bottom: 1px solid var(--border); background: color-mix(in oklab, var(--muted) 18%, transparent);
+}
+.atlas-inspector-modes button {
+  min-width: 0; border: 0; border-radius: 4px; background: transparent; color: var(--muted-foreground);
+  cursor: pointer; font-size: 10px; font-weight: 600;
+}
+.atlas-inspector-modes button:hover { color: var(--foreground); background: var(--muted); }
+.atlas-inspector-modes button.is-active { color: var(--foreground); background: var(--background); box-shadow: inset 0 0 0 1px var(--border); }
 .atlas-reference-heading {
   width: 100%; height: 29px; padding: 0 8px; display: flex; align-items: center; gap: 5px;
   border: 0; background: transparent; color: var(--muted-foreground); cursor: pointer; text-align: left; font-size: 10px; font-weight: 650;
@@ -380,6 +390,40 @@ diffs-container { --diffs-dark-bg: var(--background); --diffs-light-bg: var(--ba
 .atlas-reference-item:hover { background: var(--muted); }
 .atlas-reference-path { color: var(--foreground); font: 9px var(--font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .atlas-reference-item code { color: var(--muted-foreground); font: 9px var(--font-mono); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.atlas-call-target { border-top: 1px solid color-mix(in oklab, var(--border) 65%, transparent); }
+.atlas-call-target-row {
+  min-width: 0; min-height: 38px; padding: 3px 7px 3px 5px; display: grid;
+  grid-template-columns: 22px minmax(0, 1fr) auto; align-items: center; gap: 3px;
+}
+.atlas-call-target-row:hover { background: var(--muted); }
+.atlas-call-expand {
+  width: 22px; height: 22px; display: grid; place-items: center; border: 0; border-radius: 3px;
+  background: transparent; color: var(--muted-foreground); cursor: pointer;
+}
+.atlas-call-expand:hover { color: var(--foreground); background: var(--background); }
+.atlas-call-expand:disabled { opacity: .35; cursor: default; }
+.atlas-call-expand svg { transition: transform 100ms; }
+.atlas-call-expand svg.is-collapsed { transform: rotate(-90deg); }
+.atlas-call-declaration {
+  min-width: 0; display: flex; flex-direction: column; gap: 2px; padding: 3px;
+  border: 0; background: transparent; color: var(--foreground); text-align: left; cursor: pointer;
+}
+.atlas-call-declaration span, .atlas-call-declaration small {
+  max-width: 100%; overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+}
+.atlas-call-declaration span { font: 10px var(--font-mono); }
+.atlas-call-declaration small { color: var(--muted-foreground); font-size: 9px; }
+.atlas-call-site {
+  width: 100%; min-width: 0; padding: 5px 8px 6px 27px; display: grid; grid-template-columns: 14px minmax(0, 1fr);
+  align-items: start; gap: 5px; border: 0; background: color-mix(in oklab, var(--muted) 18%, transparent);
+  color: var(--muted-foreground); text-align: left; cursor: pointer;
+}
+.atlas-call-site:hover { background: var(--muted); color: var(--foreground); }
+.atlas-call-site > svg { margin-top: 1px; }
+.atlas-call-site > span { min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.atlas-call-site strong, .atlas-call-site code { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.atlas-call-site strong { color: var(--foreground); font: 9px var(--font-mono); font-weight: 500; }
+.atlas-call-site code { font: 9px var(--font-mono); }
 .atlas-inspector-message { padding: 12px; color: var(--muted-foreground); font-size: 10px; line-height: 1.5; overflow-wrap: anywhere; }
 .atlas-inspector-message kbd { padding: 1px 3px; border: 1px solid var(--border); border-radius: 3px; background: var(--background); font: 9px var(--font-mono); }
 

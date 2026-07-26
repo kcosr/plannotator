@@ -10,6 +10,7 @@ import { isAbsolute, relative, resolve } from "node:path";
 import {
   buildAtlasSnapshot,
   readAtlasSource,
+  resolveAtlasCallHierarchy,
   resolveAtlasReferences,
   type AtlasSemanticProviderCapability,
   type AtlasSnapshot,
@@ -211,6 +212,38 @@ export async function startExploreServer(
               sourcePath,
               line,
               column,
+            ),
+          );
+        }
+
+        if (method === "GET" && url.pathname === "/api/atlas/calls") {
+          if (status !== "ready" || !snapshot) {
+            if (status === "error") {
+              return Response.json(
+                { status, error: indexingError ?? "Repository indexing failed" },
+                { status: 500 },
+              );
+            }
+            return Response.json({ status: "indexing" }, { status: 202 });
+          }
+
+          const requestedPath = url.searchParams.get("path");
+          if (!requestedPath) return jsonError("Missing path parameter", 400);
+          const sourcePath = normalizeSourcePath(rootPath, requestedPath);
+          if (!sourcePath) return jsonError("Source file not found", 404);
+          const line = Number(url.searchParams.get("line"));
+          const column = Number(url.searchParams.get("column"));
+          if (!Number.isInteger(line) || line < 1 || !Number.isInteger(column) || column < 1) {
+            return jsonError("Line and column must be positive integers", 400);
+          }
+          return Response.json(
+            await resolveAtlasCallHierarchy(
+              semanticSession,
+              snapshot,
+              sourcePath,
+              line,
+              column,
+              req.signal,
             ),
           );
         }
