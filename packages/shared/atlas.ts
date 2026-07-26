@@ -13,6 +13,9 @@ import {
 	classifyRustRepositoryTestRanges,
 	type AtlasTestRange,
 } from "./atlas-test-classification";
+import { classifyCFamilyTestRanges } from "./atlas-test-classification-c";
+import { classifyConventionalTestRanges } from "./atlas-test-classification-conventions";
+import { classifyJavaScriptTestRanges } from "./atlas-test-classification-js";
 
 const execFileAsync = promisify(execFile);
 
@@ -839,7 +842,7 @@ export async function buildAtlasSnapshot(
 		resolvedRoot,
 		acceptedFiles.map((file) => file.path),
 	);
-	const rustTestRanges = classifyRustRepositoryTestRanges(
+	const testRangesByPath = classifyRustRepositoryTestRanges(
 		acceptedFiles
 			.filter((file) => languageForPath(file.path)?.language === "rust")
 			.map((file) => ({
@@ -847,6 +850,46 @@ export async function buildAtlasSnapshot(
 				outline: structure.files.get(file.path),
 			})),
 	);
+	for (const file of acceptedFiles) {
+		const language = languageForPath(file.path)?.language;
+		if (language === "typescript" || language === "javascript") {
+			testRangesByPath.set(
+				file.path,
+				classifyJavaScriptTestRanges(
+					file.path,
+					file.content,
+					structure.files.get(file.path),
+				),
+			);
+			continue;
+		}
+		if (language === "c" || language === "cpp") {
+			testRangesByPath.set(
+				file.path,
+				classifyCFamilyTestRanges(
+					file.path,
+					file.content,
+					structure.files.get(file.path),
+				),
+			);
+			continue;
+		}
+		if (
+			language !== "python" &&
+			language !== "go" &&
+			language !== "java" &&
+			language !== "ruby"
+		) continue;
+		testRangesByPath.set(
+			file.path,
+			classifyConventionalTestRanges(
+				language,
+				file.path,
+				file.content,
+				structure.files.get(file.path),
+			),
+		);
+	}
 
 	for (const accepted of acceptedFiles) {
 		const analysis = analyzeOutline(
@@ -861,7 +904,7 @@ export async function buildAtlasSnapshot(
 
 		const id = nodeId("file", accepted.path);
 		const parentId = ensureDirectoryNodes(accepted.path, rootNode, nodesById);
-		const testRanges = rustTestRanges.get(accepted.path) ?? [];
+		const testRanges = testRangesByPath.get(accepted.path) ?? [];
 		const classifiedTestMetrics = testMetrics(
 			accepted.content,
 			analysis.language,

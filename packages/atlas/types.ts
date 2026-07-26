@@ -6,7 +6,22 @@ export type CodeFilter = 'all' | 'no-tests' | 'tests';
 export interface AtlasTestRange {
   startLine: number;
   endLine: number;
-  reason: 'rust-test-attribute' | 'rust-cfg-test' | 'rust-integration-file';
+  reason:
+    | 'rust-test-attribute'
+    | 'rust-cfg-test'
+    | 'rust-integration-file'
+    | 'python-test-file'
+    | 'python-test-symbol'
+    | 'go-test-file'
+    | 'java-test-file'
+    | 'java-test-annotation'
+    | 'ruby-test-file'
+    | 'ruby-test-symbol'
+    | 'js-test-file'
+    | 'js-test-call'
+    | 'c-family-test-file'
+    | 'c-family-test-macro'
+    | 'c-family-test-function';
   confidence: 'semantic' | 'convention';
 }
 

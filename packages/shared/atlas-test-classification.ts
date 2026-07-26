@@ -8,7 +8,19 @@ import { posix } from "node:path";
 export type AtlasTestRangeReason =
 	| "rust-test-attribute"
 	| "rust-cfg-test"
-	| "rust-integration-file";
+	| "rust-integration-file"
+	| "python-test-file"
+	| "python-test-symbol"
+	| "go-test-file"
+	| "java-test-file"
+	| "java-test-annotation"
+	| "ruby-test-file"
+	| "ruby-test-symbol"
+	| "js-test-file"
+	| "js-test-call"
+	| "c-family-test-file"
+	| "c-family-test-macro"
+	| "c-family-test-function";
 
 export interface AtlasTestRange {
 	startLine: number;

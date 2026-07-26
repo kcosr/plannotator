@@ -234,8 +234,8 @@ function CodeFilterControl({
     <div
       className="atlas-code-filter"
       role="group"
-      aria-label="Rust test code filter"
-      title="Filter using indexed Rust test attributes, cfg(test) scopes, and integration-test files"
+      aria-label="Test code filter"
+      title="Filter using indexed language test syntax and conventional test files"
     >
       {options.map((option) => (
         <button

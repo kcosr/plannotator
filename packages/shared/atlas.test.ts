@@ -246,6 +246,50 @@ describe("buildAtlasSnapshot", () => {
 		expect(orphan.testLines).toBe(0);
 		expect(orphan.symbols.every((symbol) => !symbol.isTest)).toBe(true);
 	});
+
+	test("classifies conventional tests across supported languages", async () => {
+		const root = await fixture();
+		await mkdir(join(root, "tests"), { recursive: true });
+		await mkdir(join(root, "internal"), { recursive: true });
+		await mkdir(join(root, "src", "test", "java"), { recursive: true });
+		await mkdir(join(root, "spec"), { recursive: true });
+		await writeFile(join(root, "tests", "test_service.py"), "def test_service():\n    assert True\n");
+		await writeFile(
+			join(root, "internal", "service_test.go"),
+			"package internal\n\nfunc TestService(t *testing.T) {}\n",
+		);
+		await writeFile(
+			join(root, "src", "test", "java", "ServiceTest.java"),
+			"class ServiceTest { void works() {} }\n",
+		);
+		await writeFile(
+			join(root, "spec", "service_spec.rb"),
+			"describe Service do\n  it('works') { }\nend\n",
+		);
+		await writeFile(
+			join(root, "tests", "widget.spec.ts"),
+			"import { test } from 'vitest';\ntest('works', () => {});\n",
+		);
+		await writeFile(
+			join(root, "tests", "parser_test.cpp"),
+			"void parser_test() {}\n",
+		);
+
+		const snapshot = await buildAtlasSnapshot(root);
+		for (const path of [
+			"tests/test_service.py",
+			"internal/service_test.go",
+			"src/test/java/ServiceTest.java",
+			"spec/service_spec.rb",
+			"tests/widget.spec.ts",
+			"tests/parser_test.cpp",
+		]) {
+			const node = snapshot.nodes.find((candidate) => candidate.path === path)!;
+			expect(node.testLines).toBe(node.lines);
+			expect(node.testBytes).toBe(node.bytes);
+			expect(node.symbols.every((symbol) => symbol.isTest)).toBe(true);
+		}
+	});
 });
 
 describe("Atlas source helpers", () => {

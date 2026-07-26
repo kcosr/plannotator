@@ -1,0 +1,131 @@
+import { describe, expect, test } from "bun:test";
+import type { StructuralFileOutline, StructuralItem } from "./atlas-structure";
+import { classifyConventionalTestRanges } from "./atlas-test-classification-conventions";
+
+function item(
+	name: string,
+	startLine: number,
+	endLine: number,
+): StructuralItem {
+	return {
+		role: "item",
+		symbolType: "function",
+		name,
+		range: {
+			start: { line: startLine - 1, column: 0 },
+			end: { line: endLine - 1, column: 1 },
+		},
+		signature: name,
+		astKind: "function",
+		isImport: false,
+		isExported: false,
+	};
+}
+
+function outline(language: string, items: StructuralItem[]): StructuralFileOutline {
+	return { path: "source", language, items };
+}
+
+describe("conventional Atlas test classification", () => {
+	test("classifies Python test files and inline test symbols", () => {
+		expect(
+			classifyConventionalTestRanges(
+				"python",
+				"tests/test_service.py",
+				"def helper():\n    pass\n",
+				undefined,
+			),
+		).toEqual([expect.objectContaining({
+			startLine: 1,
+			endLine: 2,
+			reason: "python-test-file",
+			confidence: "convention",
+		})]);
+
+		expect(
+			classifyConventionalTestRanges(
+				"python",
+				"src/service.py",
+				"def live():\n    pass\n\ndef test_inline():\n    pass\n",
+				outline("python", [item("live", 1, 2), item("test_inline", 4, 5)]),
+			),
+		).toEqual([expect.objectContaining({
+			startLine: 4,
+			endLine: 5,
+			reason: "python-test-symbol",
+			confidence: "semantic",
+		})]);
+	});
+
+	test("classifies Go test files", () => {
+		expect(
+			classifyConventionalTestRanges(
+				"go",
+				"internal/service_test.go",
+				"package internal\n\nfunc TestService(t *testing.T) {}\n",
+				undefined,
+			),
+		).toEqual([expect.objectContaining({
+			startLine: 1,
+			endLine: 3,
+			reason: "go-test-file",
+		})]);
+		expect(
+			classifyConventionalTestRanges(
+				"go",
+				"internal/service.go",
+				"package internal\n",
+				undefined,
+			),
+		).toEqual([]);
+	});
+
+	test("classifies Java test paths and annotated methods", () => {
+		expect(
+			classifyConventionalTestRanges(
+				"java",
+				"src/test/java/example/ServiceChecks.java",
+				"class ServiceChecks {}\n",
+				undefined,
+			),
+		).toEqual([expect.objectContaining({ reason: "java-test-file" })]);
+
+		expect(
+			classifyConventionalTestRanges(
+				"java",
+				"src/main/java/example/Service.java",
+				"class Service {\n  @Test\n  void works() {}\n}\n",
+				outline("java", [item("works", 3, 3)]),
+			),
+		).toEqual([expect.objectContaining({
+			startLine: 2,
+			endLine: 3,
+			reason: "java-test-annotation",
+			confidence: "semantic",
+		})]);
+	});
+
+	test("classifies Ruby spec files and test methods", () => {
+		expect(
+			classifyConventionalTestRanges(
+				"ruby",
+				"spec/service_spec.rb",
+				"describe Service do\nend\n",
+				undefined,
+			),
+		).toEqual([expect.objectContaining({ reason: "ruby-test-file" })]);
+
+		expect(
+			classifyConventionalTestRanges(
+				"ruby",
+				"lib/service.rb",
+				"def live\nend\n\ndef test_inline\nend\n",
+				outline("ruby", [item("live", 1, 2), item("test_inline", 4, 5)]),
+			),
+		).toEqual([expect.objectContaining({
+			startLine: 4,
+			endLine: 5,
+			reason: "ruby-test-symbol",
+		})]);
+	});
+});
