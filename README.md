@@ -118,14 +118,20 @@ GitButler users can review the whole workspace, one stack, or one branch layer. 
 ```
 plannotator explore                    # Explore the repository in the current directory
 plannotator explore ./path/to/repo     # Explore another local repository
+plannotator index ./path/to/repo       # Build the index without opening the UI
+plannotator index . --index-path /var/cache/project-atlas.sqlite3
 ```
 
 Explore opens a local Codebase Atlas with linked Overview, Symbols, and
 read-only Source views. Overview can toggle relationship analysis and its
-dependency inspector without leaving the active treemap. Rust repositories can
-be filtered with `All`, `No tests`, and `Tests`; mixed files retain their source
-line numbers. The repository is indexed after the local listener starts, and
-the UI reports scan progress.
+dependency inspector without leaving the active treemap. Supported languages
+can be filtered with `All`, `No tests`, and `Tests`; mixed files retain their
+source line numbers. The repository is indexed after the local listener starts,
+and the UI reports scan progress. By default the portable SQLite index is
+stored at `.plannotator/atlas.sqlite3` inside the repository, so it can be
+committed with the source. Use `--index-path` or
+`PLANNOTATOR_ATLAS_INDEX_PATH` to place it elsewhere; relative overrides are
+resolved from the repository root.
 
 ### Plan mode
 
@@ -360,6 +366,7 @@ Settings are saved in cookies (not localStorage) because each hook invocation ru
 | `PLANNOTATOR_JINA` | `0`/`false` to disable Jina Reader for URL annotation |
 | `JINA_API_KEY` | Jina Reader API key for higher rate limits |
 | `PLANNOTATOR_DATA_DIR` | Base directory for all Plannotator data (plans, history, drafts, `config.json`). Default: `~/.plannotator`; if that directory doesn't exist and `$XDG_DATA_HOME` is set to an absolute path, `$XDG_DATA_HOME/plannotator` is used instead |
+| `PLANNOTATOR_ATLAS_INDEX_PATH` | Codebase Atlas SQLite index path. Relative paths resolve from the repository root. Default: `.plannotator/atlas.sqlite3` in each repository |
 | `PLANNOTATOR_AST_GREP_PATH` | Override the ast-grep executable used by Explore. Full installers manage ast-grep 0.45.0 under the Plannotator data directory by default |
 | `PLANNOTATOR_SKIP_AST_GREP_INSTALL` | Skip the managed ast-grep 0.45.0 sidecar during a full install. Explore indexing then requires `ast-grep` on `PATH` or `PLANNOTATOR_AST_GREP_PATH` |
 | `PLANNOTATOR_LSP_TYPESCRIPT_LANGUAGE_SERVER` | Override the `typescript-language-server` executable used for TypeScript and JavaScript definitions and references |

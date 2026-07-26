@@ -19,7 +19,6 @@ import {
   AtlasIndexSession,
   type AtlasIndexSessionStatus,
 } from "@plannotator/shared/atlas-index-session";
-import { getDefaultAtlasSnapshotCachePath } from "@plannotator/shared/atlas-snapshot-cache";
 import {
   AtlasSemanticSession,
   probeAtlasSemanticCapabilities,
@@ -42,7 +41,7 @@ export type AtlasIndexStatus = AtlasIndexSessionStatus["status"];
 export interface ExploreServerOptions {
   rootPath: string;
   htmlContent: string;
-  cachePath?: string;
+  indexPath?: string;
   onReady?: (url: string, isRemote: boolean, port: number) => void | Promise<void>;
 }
 
@@ -73,12 +72,12 @@ export interface AtlasFeedbackResult {
 
 export interface IndexAtlasRepositoryOptions {
   rootPath: string;
-  cachePath?: string;
+  indexPath?: string;
 }
 
 export interface IndexAtlasRepositoryResult {
   snapshot: AtlasSnapshot;
-  cachePath: string;
+  indexPath: string;
   source: "cache" | "fresh";
 }
 
@@ -120,16 +119,16 @@ async function warmAtlasSemantics(
 export async function indexAtlasRepository(
   options: IndexAtlasRepositoryOptions,
 ): Promise<IndexAtlasRepositoryResult> {
-  const cachePath = resolve(
-    options.cachePath ?? getDefaultAtlasSnapshotCachePath(),
-  );
   const session = await AtlasIndexSession.open({
     rootPath: options.rootPath,
-    cacheOptions: { databasePath: cachePath },
+    cacheOptions: {
+      ...(options.indexPath && { indexPath: options.indexPath }),
+    },
     buildSnapshot: ({ rootPath }) => buildIndexedAtlasSnapshot(rootPath),
   });
   try {
-    await session.reindex();
+    session.start();
+    await session.waitUntilIdle();
     const status = session.getStatus();
     const snapshot = session.getSnapshot();
     if (!snapshot || status.status === "error") {
@@ -137,7 +136,7 @@ export async function indexAtlasRepository(
     }
     return {
       snapshot,
-      cachePath,
+      indexPath: session.indexPath,
       source: status.source ?? "fresh",
     };
   } finally {
@@ -287,8 +286,8 @@ export async function startExploreServer(
   const semanticSession = new AtlasSemanticSession();
   const indexSession = await AtlasIndexSession.open({
     rootPath,
-    ...(options.cachePath && {
-      cacheOptions: { databasePath: options.cachePath },
+    ...(options.indexPath && {
+      cacheOptions: { indexPath: options.indexPath },
     }),
     buildSnapshot: ({ rootPath: repositoryRoot }) =>
       buildIndexedAtlasSnapshot(repositoryRoot),
@@ -430,6 +429,7 @@ export async function startExploreServer(
           return Response.json(
             await resolveAtlasReferences(
               semanticSession,
+              rootPath,
               snapshot,
               symbol,
               sourcePath,
@@ -462,6 +462,7 @@ export async function startExploreServer(
           return Response.json(
             await resolveAtlasCallHierarchy(
               semanticSession,
+              rootPath,
               snapshot,
               sourcePath,
               line,

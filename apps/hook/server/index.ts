@@ -156,6 +156,7 @@ import {
   isSubcommandHelpInvocation,
   isTopLevelHelpInvocation,
   isVersionInvocation,
+  parseAtlasCommandArgs,
 } from "./cli";
 import path from "path";
 import { tmpdir } from "os";
@@ -490,12 +491,16 @@ if (args[0] === "sessions") {
   // CODEBASE INDEX MODE
   // ============================================
 
-  if (args.length > 2) {
-    console.error("Usage: plannotator index [path]");
+  let indexArgs;
+  try {
+    indexArgs = parseAtlasCommandArgs(args.slice(1));
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    console.error("Usage: plannotator index [path] [--index-path <file>]");
     process.exit(1);
   }
 
-  const requestedRoot = args[1] ?? process.cwd();
+  const requestedRoot = indexArgs.rootPath ?? process.cwd();
   let rootPath: string;
   try {
     rootPath = realpathSync(path.resolve(requestedRoot));
@@ -508,12 +513,15 @@ if (args[0] === "sessions") {
   }
 
   try {
-    const result = await indexAtlasRepository({ rootPath });
+    const result = await indexAtlasRepository({
+      rootPath,
+      ...(indexArgs.indexPath && { indexPath: indexArgs.indexPath }),
+    });
     console.log(formatIndexSuccess({
       files: result.snapshot.summary.files,
       symbols: result.snapshot.summary.symbols,
       source: result.source,
-      cachePath: result.cachePath,
+      indexPath: result.indexPath,
     }));
     process.exit(0);
   } catch (error) {
@@ -528,12 +536,16 @@ if (args[0] === "sessions") {
   // CODEBASE EXPLORER MODE
   // ============================================
 
-  if (args.length > 2) {
-    console.error("Usage: plannotator explore [path]");
+  let exploreArgs;
+  try {
+    exploreArgs = parseAtlasCommandArgs(args.slice(1));
+  } catch (error) {
+    console.error(error instanceof Error ? error.message : String(error));
+    console.error("Usage: plannotator explore [path] [--index-path <file>]");
     process.exit(1);
   }
 
-  const requestedRoot = args[1] ?? process.cwd();
+  const requestedRoot = exploreArgs.rootPath ?? process.cwd();
   let rootPath: string;
   try {
     rootPath = realpathSync(path.resolve(requestedRoot));
@@ -549,6 +561,7 @@ if (args[0] === "sessions") {
   const server = await startExploreServer({
     rootPath,
     htmlContent: exploreHtmlContent,
+    ...(exploreArgs.indexPath && { indexPath: exploreArgs.indexPath }),
     onReady: (url, isRemote, port) => {
       return handleExploreServerReady(url, isRemote, port);
     },

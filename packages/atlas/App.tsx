@@ -430,7 +430,6 @@ export default function AtlasApp() {
     context: snapshot ? {
       mode: 'codebase-atlas',
       atlas: {
-        rootPath: snapshot.rootPath,
         rootName: snapshot.rootName,
         ...(annotationSummary && { annotations: annotationSummary }),
       },

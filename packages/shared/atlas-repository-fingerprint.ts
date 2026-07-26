@@ -45,6 +45,7 @@ const EXCLUDED_DIRECTORIES = new Set([
 	".next",
 	".nuxt",
 	".parcel-cache",
+	".plannotator",
 	".pytest_cache",
 	".svn",
 	".turbo",

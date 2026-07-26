@@ -29,9 +29,11 @@ describe("collectAtlasRepositoryFingerprint", () => {
 	test("tracks supported source content and ignores unrelated files", async () => {
 		const root = repository();
 		mkdirSync(join(root, "src"));
+		mkdirSync(join(root, ".plannotator"));
 		mkdirSync(join(root, "node_modules", "package"), { recursive: true });
 		writeFileSync(join(root, "src", "main.ts"), "export const value = 1;\n");
 		writeFileSync(join(root, "README.md"), "first\n");
+		writeFileSync(join(root, ".plannotator", "generated.ts"), "export const cache = 1;\n");
 		writeFileSync(
 			join(root, "node_modules", "package", "index.ts"),
 			"export const dependency = 1;\n",
@@ -42,6 +44,7 @@ describe("collectAtlasRepositoryFingerprint", () => {
 		expect(initial.truncated).toBe(false);
 
 		writeFileSync(join(root, "README.md"), "second\n");
+		writeFileSync(join(root, ".plannotator", "generated.ts"), "export const cache = 2;\n");
 		writeFileSync(
 			join(root, "node_modules", "package", "index.ts"),
 			"export const dependency = 2;\n",
@@ -72,10 +75,13 @@ describe("collectAtlasRepositoryFingerprint", () => {
 		writeFileSync(join(root, ".gitignore"), "ignored.ts\n");
 		writeFileSync(join(root, "ignored.ts"), "export const ignored = 1;\n");
 		writeFileSync(join(root, "visible.ts"), "export const visible = 1;\n");
+		mkdirSync(join(root, ".plannotator"));
+		writeFileSync(join(root, ".plannotator", "generated.ts"), "export const cache = 1;\n");
 
 		const initial = await collectAtlasRepositoryFingerprint(root);
 		expect(initial.files).toBe(1);
 		writeFileSync(join(root, "ignored.ts"), "export const ignored = 2;\n");
+		writeFileSync(join(root, ".plannotator", "generated.ts"), "export const cache = 2;\n");
 		expect((await collectAtlasRepositoryFingerprint(root)).fingerprint)
 			.toBe(initial.fingerprint);
 		writeFileSync(join(root, "visible.ts"), "export const visible = 2;\n");

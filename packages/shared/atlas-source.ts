@@ -177,6 +177,7 @@ export async function readAtlasSource(
 }
 
 export async function findAtlasDeclarations(
+	rootPath: string,
 	snapshot: AtlasSnapshot,
 	symbol: string,
 	filePath?: string,
@@ -210,7 +211,7 @@ export async function findAtlasDeclarations(
 		const cached = sourceByFileId.get(node.id);
 		if (cached) return cached;
 		try {
-			const source = await readAtlasSource(snapshot.rootPath, node.path, maxFileBytes);
+			const source = await readAtlasSource(rootPath, node.path, maxFileBytes);
 			sourceByFileId.set(node.id, source);
 			return source;
 		} catch {
@@ -265,6 +266,7 @@ function semanticLanguage(value: string | null): AtlasSemanticLanguage | null {
 }
 
 async function referenceFromSemanticLocation(
+	rootPath: string,
 	snapshot: AtlasSnapshot,
 	location: AtlasSemanticLocation,
 	kind: AtlasReference["kind"],
@@ -276,7 +278,7 @@ async function referenceFromSemanticLocation(
 	if (!node) return null;
 	let snippet = "";
 	try {
-		const source = await readAtlasSource(snapshot.rootPath, node.path);
+		const source = await readAtlasSource(rootPath, node.path);
 		const line = source.content.split(/\r\n|\r|\n/)[location.range.start.line - 1] ?? "";
 		snippet = line.length > 240 ? `${line.slice(0, 239)}…` : line;
 	} catch {
@@ -293,12 +295,15 @@ async function referenceFromSemanticLocation(
 }
 
 async function convertSemanticLocations(
+	rootPath: string,
 	snapshot: AtlasSnapshot,
 	locations: AtlasSemanticLocation[],
 	kind: AtlasReference["kind"],
 ): Promise<AtlasReference[]> {
 	const converted = await Promise.all(
-		locations.map((location) => referenceFromSemanticLocation(snapshot, location, kind)),
+		locations.map((location) =>
+			referenceFromSemanticLocation(rootPath, snapshot, location, kind)
+		),
 	);
 	return converted
 		.filter((location): location is AtlasReference => location !== null)
@@ -337,6 +342,7 @@ async function callHierarchyLocation(
 }
 
 async function callHierarchyTarget(
+	rootPath: string,
 	snapshot: AtlasSnapshot,
 	item: AtlasSemanticCallHierarchyItem,
 	callSitePath: string | null,
@@ -346,7 +352,7 @@ async function callHierarchyTarget(
 ): Promise<AtlasCallHierarchyTarget | null> {
 	if (item.location.external) return null;
 	const declaration = await callHierarchyLocation(
-		snapshot.rootPath,
+		rootPath,
 		item.location.filePath,
 		item.selectionRange,
 		nodesByPath,
@@ -359,7 +365,7 @@ async function callHierarchyTarget(
 				await Promise.all(
 					fromRanges.map((range) =>
 						callHierarchyLocation(
-							snapshot.rootPath,
+							rootPath,
 							callSitePath,
 							range,
 							nodesByPath,
@@ -378,6 +384,7 @@ async function callHierarchyTarget(
 }
 
 async function convertCallHierarchyCalls(
+	rootPath: string,
 	snapshot: AtlasSnapshot,
 	calls: AtlasSemanticCallHierarchyCall[],
 	callSitePath: (call: AtlasSemanticCallHierarchyCall) => string | null,
@@ -425,6 +432,7 @@ async function convertCallHierarchyCalls(
 	const converted = await Promise.all(
 		boundedCalls.map((call) =>
 			callHierarchyTarget(
+				rootPath,
 				snapshot,
 				call.item,
 				callSitePath(call),
@@ -465,6 +473,7 @@ async function convertCallHierarchyCalls(
 
 export async function resolveAtlasCallHierarchy(
 	session: AtlasSemanticSession,
+	rootPath: string,
 	snapshot: AtlasSnapshot,
 	filePath: string,
 	line: number,
@@ -503,7 +512,7 @@ export async function resolveAtlasCallHierarchy(
 
 	try {
 		let hierarchy = await session.findCallHierarchy(
-			snapshot.rootPath,
+			rootPath,
 			normalizedPath,
 			line,
 			column,
@@ -514,7 +523,7 @@ export async function resolveAtlasCallHierarchy(
 			if (!hierarchy.supported || hierarchy.root !== null) break;
 			await waitForSemanticRetry(delayMs, signal);
 			hierarchy = await session.findCallHierarchy(
-				snapshot.rootPath,
+				rootPath,
 				normalizedPath,
 				line,
 				column,
@@ -546,6 +555,7 @@ export async function resolveAtlasCallHierarchy(
 		const root = hierarchy.root === null
 			? null
 			: await callHierarchyTarget(
+				rootPath,
 				snapshot,
 				hierarchy.root,
 				null,
@@ -554,19 +564,21 @@ export async function resolveAtlasCallHierarchy(
 				sourceLines,
 			);
 		const callers = await convertCallHierarchyCalls(
+			rootPath,
 			snapshot,
 			hierarchy.incoming,
 			(call) => call.item.location.external ? null : call.item.location.filePath,
 			nodesByPath,
 			sourceLines,
 		);
-		const rootPath = hierarchy.root?.location.external === false
+		const rootFilePath = hierarchy.root?.location.external === false
 			? hierarchy.root.location.filePath
 			: normalizedPath;
 		const callees = await convertCallHierarchyCalls(
+			rootPath,
 			snapshot,
 			hierarchy.outgoing,
-			() => rootPath,
+			() => rootFilePath,
 			nodesByPath,
 			sourceLines,
 		);
@@ -605,6 +617,7 @@ export async function resolveAtlasCallHierarchy(
 
 export async function resolveAtlasReferences(
 	session: AtlasSemanticSession,
+	rootPath: string,
 	snapshot: AtlasSnapshot,
 	symbol: string,
 	filePath: string,
@@ -617,7 +630,12 @@ export async function resolveAtlasReferences(
 	);
 	if (!node) throw new Error("Atlas source file is not indexed");
 	const language = semanticLanguage(node.language);
-	const indexedDeclarations = await findAtlasDeclarations(snapshot, symbol, normalizedPath);
+	const indexedDeclarations = await findAtlasDeclarations(
+		rootPath,
+		snapshot,
+		symbol,
+		normalizedPath,
+	);
 	const capability = snapshot.analyzers.semantic.providers.find(
 		(provider) => provider.language === node.language,
 	);
@@ -640,7 +658,7 @@ export async function resolveAtlasReferences(
 
 	try {
 		let locations = await session.findLocations(
-			snapshot.rootPath,
+			rootPath,
 			normalizedPath,
 			line,
 			column,
@@ -654,7 +672,7 @@ export async function resolveAtlasReferences(
 			) break;
 			await new Promise((resolvePromise) => setTimeout(resolvePromise, delayMs));
 			locations = await session.findLocations(
-				snapshot.rootPath,
+				rootPath,
 				normalizedPath,
 				line,
 				column,
@@ -662,8 +680,18 @@ export async function resolveAtlasReferences(
 			);
 		}
 		return {
-			definitions: await convertSemanticLocations(snapshot, locations.definitions, "definition"),
-			references: await convertSemanticLocations(snapshot, locations.references, "reference"),
+			definitions: await convertSemanticLocations(
+				rootPath,
+				snapshot,
+				locations.definitions,
+				"definition",
+			),
+			references: await convertSemanticLocations(
+				rootPath,
+				snapshot,
+				locations.references,
+				"reference",
+			),
 			provider: {
 				kind: "lsp",
 				name: capability?.name ?? language,

@@ -120,7 +120,6 @@ export function buildForkPreamble(ctx: AIContext): string {
     case "codebase-atlas": {
       lines.push("## Repository in Codebase Atlas");
       lines.push(`Name: ${ctx.atlas.rootName}`);
-      lines.push(`Root: ${ctx.atlas.rootPath}`);
       if (ctx.atlas.annotations) {
         lines.push("");
         lines.push("## User Annotations So Far");
@@ -273,7 +272,6 @@ function buildCodebaseAtlasPrompt(
     "",
     "## Repository",
     `Name: ${ctx.atlas.rootName}`,
-    `Root: ${ctx.atlas.rootPath}`,
   ];
 
   if (ctx.atlas.annotations) {

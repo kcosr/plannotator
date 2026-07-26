@@ -85,8 +85,6 @@ export interface AnnotateContext {
  * with each query so a long-lived session follows the user's live navigation.
  */
 export interface CodebaseAtlasContext {
-  /** Absolute root directory available to the AI provider. */
-  rootPath: string;
   /** Human-readable repository name shown in Atlas. */
   rootName: string;
   /** Summary of annotations the user has made so far. */

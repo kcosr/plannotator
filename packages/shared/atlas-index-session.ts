@@ -36,7 +36,7 @@ export interface OpenAtlasIndexSessionOptions {
 	rootPath: string;
 	buildSnapshot: (context: AtlasSnapshotBuildContext) => Promise<AtlasSnapshot>;
 	cache?: AtlasSnapshotCache;
-	cacheOptions?: OpenAtlasSnapshotCacheOptions;
+	cacheOptions?: Omit<OpenAtlasSnapshotCacheOptions, "rootPath">;
 	fingerprintOptions?: AtlasRepositoryFingerprintOptions;
 	collectFingerprint?: (rootPath: string) => Promise<string>;
 }
@@ -49,7 +49,6 @@ export function isAtlasSnapshot(value: unknown): value is AtlasSnapshot {
 	return (
 		isRecord(value) &&
 		value.version === ATLAS_SNAPSHOT_VERSION &&
-		typeof value.rootPath === "string" &&
 		typeof value.rootName === "string" &&
 		typeof value.rootId === "string" &&
 		typeof value.generatedAt === "string" &&
@@ -90,7 +89,6 @@ export class AtlasIndexSession {
 				)).fingerprint);
 
 		const cached = cache.getLatest(
-			rootPath,
 			ATLAS_SNAPSHOT_VERSION,
 			isAtlasSnapshot,
 		);
@@ -112,7 +110,10 @@ export class AtlasIndexSession {
 		options: OpenAtlasIndexSessionOptions,
 	): Promise<AtlasIndexSession> {
 		const rootPath = await realpath(resolve(options.rootPath));
-		const cache = options.cache ?? await openAtlasSnapshotCache(options.cacheOptions);
+		const cache = options.cache ?? await openAtlasSnapshotCache({
+			...options.cacheOptions,
+			rootPath,
+		});
 		return new AtlasIndexSession(rootPath, options, cache);
 	}
 
@@ -132,6 +133,10 @@ export class AtlasIndexSession {
 
 	getStatus(): AtlasIndexSessionStatus {
 		return { ...this.#status };
+	}
+
+	get indexPath(): string {
+		return this.#cache.indexPath;
 	}
 
 	getSnapshot(): AtlasSnapshot | undefined {
@@ -232,14 +237,12 @@ export class AtlasIndexSession {
 			if (this.#disposed) return;
 			if (
 				!nextSnapshot ||
-				!isAtlasSnapshot(nextSnapshot) ||
-				nextSnapshot.rootPath !== this.rootPath
+				!isAtlasSnapshot(nextSnapshot)
 			) {
 				throw new Error("Atlas snapshot builder returned an invalid snapshot");
 			}
 
 			this.#cache.set({
-				rootPath: this.rootPath,
 				repositoryFingerprint,
 				snapshotVersion: ATLAS_SNAPSHOT_VERSION,
 			}, nextSnapshot);

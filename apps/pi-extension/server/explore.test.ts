@@ -73,7 +73,7 @@ describe("Pi Codebase Atlas server", () => {
 		const server = await startExploreServer({
 			rootPath: root,
 			htmlContent: "<!doctype html><title>Atlas fixture</title>",
-			cachePath: join(root, ".atlas.sqlite3"),
+			indexPath: join(root, ".atlas.sqlite3"),
 		});
 		activeServers.add(server);
 
@@ -86,8 +86,8 @@ describe("Pi Codebase Atlas server", () => {
 		expect(favicon.headers.get("content-type")).toBe("image/png");
 
 		const snapshot = await waitForSnapshot(server.url);
-		expect(snapshot.version).toBe(3);
-		expect(snapshot.rootPath).toBe(root);
+		expect(snapshot.version).toBe(4);
+		expect(snapshot).not.toHaveProperty("rootPath");
 		expect((snapshot.summary as { files: number }).files).toBe(2);
 
 		const source = await fetch(
@@ -136,7 +136,7 @@ describe("Pi Codebase Atlas server", () => {
 		const server = await startExploreServer({
 			rootPath: root,
 			htmlContent: "<!doctype html>",
-			cachePath: join(root, ".atlas.sqlite3"),
+			indexPath: join(root, ".atlas.sqlite3"),
 		});
 		activeServers.add(server);
 		await waitForSnapshot(server.url);
@@ -200,7 +200,7 @@ describe("Pi Codebase Atlas server", () => {
 		const server = await startExploreServer({
 			rootPath: root,
 			htmlContent: "<!doctype html>",
-			cachePath: join(root, ".atlas.sqlite3"),
+			indexPath: join(root, ".atlas.sqlite3"),
 		});
 		activeServers.add(server);
 
@@ -217,7 +217,7 @@ describe("Pi Codebase Atlas server", () => {
 		const server = await startExploreServer({
 			rootPath: root,
 			htmlContent: "<!doctype html>",
-			cachePath: join(root, ".atlas.sqlite3"),
+			indexPath: join(root, ".atlas.sqlite3"),
 		});
 		activeServers.add(server);
 

@@ -84,8 +84,7 @@ export interface AtlasSummary {
 }
 
 export interface AtlasSnapshot {
-  version: 3;
-  rootPath: string;
+  version: 4;
   rootName: string;
   rootId: string;
   generatedAt: string;

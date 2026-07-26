@@ -18,6 +18,7 @@ async function fixture(): Promise<string> {
 	const root = await mkdtemp(join(tmpdir(), "plannotator-atlas-"));
 	fixtures.push(root);
 	await mkdir(join(root, "src"), { recursive: true });
+	await mkdir(join(root, ".plannotator"), { recursive: true });
 	await mkdir(join(root, "node_modules", "ignored"), { recursive: true });
 	await writeFile(
 		join(root, "src", "math.ts"),
@@ -44,6 +45,7 @@ async function fixture(): Promise<string> {
 	);
 	await writeFile(join(root, "src", "tool.py"), "class Tool:\n    def run(self):\n        return True\n");
 	await writeFile(join(root, "node_modules", "ignored", "index.ts"), "export const ignored = true;");
+	await writeFile(join(root, ".plannotator", "ignored.ts"), "export const ignored = true;");
 	await writeFile(join(root, "src", "generated.ts"), "// Code generated. DO NOT EDIT.\nexport const generated = 1;");
 	await writeFile(join(root, "src", "binary.ts"), Buffer.from([0, 1, 2, 3]));
 	return root;
@@ -58,7 +60,7 @@ describe("buildAtlasSnapshot", () => {
 		const root = await fixture();
 		const snapshot = await buildAtlasSnapshot(root);
 
-		expect(snapshot.version).toBe(3);
+		expect(snapshot.version).toBe(4);
 		expect(snapshot.analyzers.structural).toEqual(expect.objectContaining({
 			name: "ast-grep",
 			version: expect.any(String),
@@ -300,7 +302,7 @@ describe("Atlas source helpers", () => {
 		expect(source.content).toContain("double(value)");
 		expect(source.language).toBe("typescript");
 
-		const references = await findAtlasDeclarations(snapshot, "double", undefined, {
+		const references = await findAtlasDeclarations(root, snapshot, "double", undefined, {
 			maxResults: 2,
 		});
 		expect(references).toHaveLength(1);
@@ -308,7 +310,7 @@ describe("Atlas source helpers", () => {
 		expect(references[0]?.kind).toBe("definition");
 		expect(references[0]?.line).toBeGreaterThan(0);
 
-		const filtered = await findAtlasDeclarations(snapshot, "double", "src/math.ts");
+		const filtered = await findAtlasDeclarations(root, snapshot, "double", "src/math.ts");
 		expect(filtered).toHaveLength(1);
 		expect(filtered[0]).toEqual(expect.objectContaining({
 			kind: "definition",
@@ -407,6 +409,7 @@ describe("Atlas source helpers", () => {
 
 		const result = await resolveAtlasCallHierarchy(
 			session,
+			root,
 			snapshot,
 			"src/main.ts",
 			7,

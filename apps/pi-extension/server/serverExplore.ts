@@ -232,7 +232,7 @@ async function parseAtlasFeedback(
 export async function startExploreServer(options: {
 	rootPath: string;
 	htmlContent: string;
-	cachePath?: string;
+	indexPath?: string;
 }): Promise<ExploreServerResult> {
 	const rootPath = realpathSync(resolve(options.rootPath));
 	if (!statSync(rootPath).isDirectory()) {
@@ -243,8 +243,8 @@ export async function startExploreServer(options: {
 	const semanticSession = new AtlasSemanticSession();
 	const indexSession = await AtlasIndexSession.open({
 		rootPath,
-		...(options.cachePath && {
-			cacheOptions: { databasePath: options.cachePath },
+		...(options.indexPath && {
+			cacheOptions: { indexPath: options.indexPath },
 		}),
 		buildSnapshot: ({ rootPath: repositoryRoot }) =>
 			buildIndexedAtlasSnapshot(repositoryRoot),
@@ -392,6 +392,7 @@ export async function startExploreServer(options: {
 					res,
 					await resolveAtlasReferences(
 						semanticSession,
+						rootPath,
 						snapshot,
 						symbol,
 						sourcePath,
@@ -434,6 +435,7 @@ export async function startExploreServer(options: {
 				try {
 					const calls = await resolveAtlasCallHierarchy(
 						semanticSession,
+						rootPath,
 						snapshot,
 						sourcePath,
 						line,

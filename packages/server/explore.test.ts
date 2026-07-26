@@ -55,7 +55,7 @@ describe("explore server", () => {
     const server = await startExploreServer({
       rootPath: root,
       htmlContent: SPA_HTML,
-      cachePath: join(environment.makeTempDir(), "atlas.sqlite3"),
+      indexPath: join(environment.makeTempDir(), "atlas.sqlite3"),
       onReady: (url, isRemote, port) => {
         ready = { url, isRemote, port };
       },
@@ -218,7 +218,7 @@ describe("explore server", () => {
     const server = await startExploreServer({
       rootPath: root,
       htmlContent: SPA_HTML,
-      cachePath: join(environment.makeTempDir(), "atlas.sqlite3"),
+      indexPath: join(environment.makeTempDir(), "atlas.sqlite3"),
     });
 
     let closed = false;
@@ -234,19 +234,20 @@ describe("explore server", () => {
 
   test("manual indexing writes a snapshot that a server hydrates immediately", async () => {
     const root = environment.makeTempDir();
-    const cachePath = join(environment.makeTempDir(), "atlas.sqlite3");
+    const indexPath = join(environment.makeTempDir(), "atlas.sqlite3");
     writeFileSync(join(root, "index.ts"), "export const cached = true;\n");
 
-    const indexed = await indexAtlasRepository({ rootPath: root, cachePath });
+    const indexed = await indexAtlasRepository({ rootPath: root, indexPath });
     expect(indexed.source).toBe("fresh");
     expect(indexed.snapshot.summary.files).toBe(1);
     expect(indexed.snapshot.summary.symbols).toBe(1);
-    expect(existsSync(cachePath)).toBe(true);
+    expect(indexed.indexPath).toBe(indexPath);
+    expect(existsSync(indexPath)).toBe(true);
 
     const server = await startExploreServer({
       rootPath: root,
       htmlContent: SPA_HTML,
-      cachePath,
+      indexPath,
     });
     try {
       const status = await fetch(`${server.url}/api/atlas/status`).then(
@@ -280,7 +281,7 @@ describe("explore server", () => {
     const server = await startExploreServer({
       rootPath: root,
       htmlContent: SPA_HTML,
-      cachePath: join(environment.makeTempDir(), "atlas.sqlite3"),
+      indexPath: join(environment.makeTempDir(), "atlas.sqlite3"),
     });
 
     const invalid = await fetch(`${server.url}/api/atlas/feedback`, {

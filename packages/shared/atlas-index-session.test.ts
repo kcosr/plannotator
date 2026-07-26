@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -23,10 +23,9 @@ function temporaryRepository(): { root: string; databasePath: string } {
 	return { root, databasePath: join(directory, "cache.sqlite3") };
 }
 
-function snapshot(rootPath: string, generatedAt: string): AtlasSnapshot {
+function snapshot(_rootPath: string, generatedAt: string): AtlasSnapshot {
 	return {
 		version: ATLAS_SNAPSHOT_VERSION,
-		rootPath: realpathSync.native(rootPath),
 		rootName: "repository",
 		rootId: "root",
 		generatedAt,
@@ -77,9 +76,8 @@ async function seedCache(
 	fingerprint: string,
 	value: AtlasSnapshot,
 ): Promise<void> {
-	const cache = await openAtlasSnapshotCache({ databasePath });
+	const cache = await openAtlasSnapshotCache({ rootPath: root, indexPath: databasePath });
 	expect(cache.set({
-		rootPath: root,
 		repositoryFingerprint: fingerprint,
 		snapshotVersion: ATLAS_SNAPSHOT_VERSION,
 	}, value)).toBe(true);
@@ -101,7 +99,7 @@ describe("AtlasIndexSession", () => {
 		let builds = 0;
 		const session = await AtlasIndexSession.open({
 			rootPath: root,
-			cacheOptions: { databasePath },
+			cacheOptions: { indexPath: databasePath },
 			collectFingerprint: async () => "fingerprint-a",
 			buildSnapshot: async () => {
 				builds += 1;
@@ -142,7 +140,7 @@ describe("AtlasIndexSession", () => {
 		const releaseBuild = deferred<void>();
 		const session = await AtlasIndexSession.open({
 			rootPath: root,
-			cacheOptions: { databasePath },
+			cacheOptions: { indexPath: databasePath },
 			collectFingerprint: async () => "fingerprint-new",
 			buildSnapshot: async () => {
 				buildStarted.resolve();
@@ -175,8 +173,8 @@ describe("AtlasIndexSession", () => {
 		});
 
 		await session.dispose();
-		const cache = await openAtlasSnapshotCache({ databasePath });
-		expect(cache.getLatest(root, ATLAS_SNAPSHOT_VERSION, isAtlasSnapshot))
+		const cache = await openAtlasSnapshotCache({ rootPath: root, indexPath: databasePath });
+		expect(cache.getLatest(ATLAS_SNAPSHOT_VERSION, isAtlasSnapshot))
 			.toMatchObject({
 				snapshot: fresh,
 				repositoryFingerprint: "fingerprint-new",
@@ -190,7 +188,7 @@ describe("AtlasIndexSession", () => {
 		await seedCache(root, databasePath, "fingerprint-old", cached);
 		const session = await AtlasIndexSession.open({
 			rootPath: root,
-			cacheOptions: { databasePath },
+			cacheOptions: { indexPath: databasePath },
 			collectFingerprint: async () => "fingerprint-new",
 			buildSnapshot: async () => {
 				throw new Error("index failed");
@@ -216,7 +214,7 @@ describe("AtlasIndexSession", () => {
 		const { root, databasePath } = temporaryRepository();
 		const session = await AtlasIndexSession.open({
 			rootPath: root,
-			cacheOptions: { databasePath },
+			cacheOptions: { indexPath: databasePath },
 			collectFingerprint: async () => {
 				throw new Error("fingerprint failed");
 			},
@@ -244,7 +242,7 @@ describe("AtlasIndexSession", () => {
 		let fingerprintCalls = 0;
 		const session = await AtlasIndexSession.open({
 			rootPath: root,
-			cacheOptions: { databasePath },
+			cacheOptions: { indexPath: databasePath },
 			collectFingerprint: async () => {
 				fingerprintCalls += 1;
 				return "fingerprint-a";
@@ -276,7 +274,7 @@ describe("AtlasIndexSession", () => {
 		const stable = snapshot(root, "fingerprint-b");
 		const session = await AtlasIndexSession.open({
 			rootPath: root,
-			cacheOptions: { databasePath },
+			cacheOptions: { indexPath: databasePath },
 			collectFingerprint: async () => fingerprints.shift() ?? "fingerprint-b",
 			buildSnapshot: async ({ repositoryFingerprint }) => {
 				builds += 1;
@@ -291,8 +289,8 @@ describe("AtlasIndexSession", () => {
 		expect(session.getSnapshot()?.generatedAt).toBe("fingerprint-b");
 
 		await session.dispose();
-		const cache = await openAtlasSnapshotCache({ databasePath });
-		expect(cache.getLatest(root, ATLAS_SNAPSHOT_VERSION, isAtlasSnapshot))
+		const cache = await openAtlasSnapshotCache({ rootPath: root, indexPath: databasePath });
+		expect(cache.getLatest(ATLAS_SNAPSHOT_VERSION, isAtlasSnapshot))
 			.toMatchObject({
 				snapshot: stable,
 				repositoryFingerprint: "fingerprint-b",
@@ -308,7 +306,7 @@ describe("AtlasIndexSession", () => {
 		let builds = 0;
 		const session = await AtlasIndexSession.open({
 			rootPath: root,
-			cacheOptions: { databasePath },
+			cacheOptions: { indexPath: databasePath },
 			collectFingerprint: async () => "fingerprint-a",
 			buildSnapshot: async ({ forced }) => {
 				expect(forced).toBe(true);
@@ -329,7 +327,7 @@ describe("AtlasIndexSession", () => {
 		let buildStarted = false;
 		const session = await AtlasIndexSession.open({
 			rootPath: root,
-			cacheOptions: { databasePath },
+			cacheOptions: { indexPath: databasePath },
 			collectFingerprint: async () => "fingerprint-a",
 			buildSnapshot: async () => {
 				buildStarted = true;

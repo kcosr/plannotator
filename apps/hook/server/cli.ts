@@ -22,10 +22,45 @@ export function formatVersion(): string {
 export function formatIndexSuccess(result: {
   files: number;
   symbols: number;
-  cachePath: string;
+  indexPath: string;
   source: "fresh" | "cache";
 }): string {
-  return `Indexed ${result.files} files, ${result.symbols} symbols (${result.source}); cache: ${result.cachePath}`;
+  return `Indexed ${result.files} files, ${result.symbols} symbols (${result.source}); index: ${result.indexPath}`;
+}
+
+export interface AtlasCommandArgs {
+  rootPath?: string;
+  indexPath?: string;
+}
+
+export function parseAtlasCommandArgs(args: string[]): AtlasCommandArgs {
+  let rootPath: string | undefined;
+  let indexPath: string | undefined;
+
+  for (let index = 0; index < args.length; index += 1) {
+    const argument = args[index];
+    if (argument === "--index-path") {
+      const value = args[index + 1];
+      if (!value || value.startsWith("--")) {
+        throw new Error("--index-path requires a file path");
+      }
+      if (indexPath !== undefined) {
+        throw new Error("--index-path may only be specified once");
+      }
+      indexPath = value;
+      index += 1;
+      continue;
+    }
+    if (argument.startsWith("-")) {
+      throw new Error(`Unknown option: ${argument}`);
+    }
+    if (rootPath !== undefined) {
+      throw new Error("Only one repository path may be specified");
+    }
+    rootPath = argument;
+  }
+
+  return { rootPath, indexPath };
 }
 
 export function isInteractiveNoArgInvocation(
@@ -42,8 +77,8 @@ export function formatTopLevelHelp(): string {
     "  plannotator --version, -v",
     "  plannotator [--browser <name>]",
     "  plannotator review [--git | --gitbutler] [PR_URL]",
-    "  plannotator explore [path]",
-    "  plannotator index [path]",
+    "  plannotator explore [path] [--index-path <file>]",
+    "  plannotator index [path] [--index-path <file>]",
     "  plannotator annotate <file.md | file.txt | file.html | https://... | folder/>  [--markdown] [--no-jina] [--gate] [--json] [--hook]",
     "  plannotator annotate-last [--stdin] [--gate] [--json] [--hook]",
     "  plannotator setup-goal <interview|facts> <bundle.json | -> [--json]",
@@ -68,21 +103,27 @@ export function formatTopLevelHelp(): string {
 const SUBCOMMAND_HELP: Record<string, string> = {
   explore: [
     "Usage:",
-    "  plannotator explore [path]",
+    "  plannotator explore [path] [--index-path <file>]",
     "",
     "Open an interactive codebase atlas for a directory.",
     "",
     "Arguments:",
     "  path          Directory to explore (default: current directory)",
+    "",
+    "Options:",
+    "  --index-path  Index database path (relative paths resolve from the repository)",
   ].join("\n"),
   index: [
     "Usage:",
-    "  plannotator index [path]",
+    "  plannotator index [path] [--index-path <file>]",
     "",
-    "Build and cache a fresh codebase atlas for a directory.",
+    "Build a codebase atlas for a directory.",
     "",
     "Arguments:",
     "  path          Directory to index (default: current directory)",
+    "",
+    "Options:",
+    "  --index-path  Index database path (relative paths resolve from the repository)",
   ].join("\n"),
   review: [
     "Usage:",
@@ -196,8 +237,8 @@ export function formatInteractiveNoArgClarification(): string {
     "",
     "For interactive use, try:",
     "  plannotator review",
-    "  plannotator explore [path]",
-    "  plannotator index [path]",
+    "  plannotator explore [path] [--index-path <file>]",
+    "  plannotator index [path] [--index-path <file>]",
     "  plannotator annotate <file.md | file.txt | file.html | https://...>",
     "  plannotator setup-goal interview bundle.json --json",
     "  plannotator last",

@@ -10,6 +10,7 @@ import {
   isSubcommandHelpInvocation,
   isTopLevelHelpInvocation,
   isVersionInvocation,
+  parseAtlasCommandArgs,
 } from "./cli";
 
 describe("CLI top-level help", () => {
@@ -106,7 +107,8 @@ describe("CLI subcommand help", () => {
       "plannotator explore [path]",
     );
     expect(formatSubcommandHelp("index")).toContain("plannotator index [path]");
-    expect(formatSubcommandHelp("index")).toContain("fresh codebase atlas");
+    expect(formatSubcommandHelp("index")).toContain("Build a codebase atlas");
+    expect(formatSubcommandHelp("explore")).toContain("--index-path");
     expect(formatSubcommandHelp("review")).toContain("--gitbutler");
     expect(formatSubcommandHelp("review")).toContain("PR_URL");
     expect(formatSubcommandHelp("annotate")).toContain("--no-jina");
@@ -131,15 +133,49 @@ describe("CLI --version", () => {
 });
 
 describe("CLI index result", () => {
-  test("formats one concise result line with counts, source, and cache path", () => {
+  test("formats one concise result line with counts, source, and index path", () => {
     expect(formatIndexSuccess({
       files: 42,
       symbols: 317,
       source: "fresh",
-      cachePath: "/tmp/plannotator/atlas.sqlite",
+      indexPath: "/tmp/plannotator/atlas.sqlite",
     })).toBe(
-      "Indexed 42 files, 317 symbols (fresh); cache: /tmp/plannotator/atlas.sqlite",
+      "Indexed 42 files, 317 symbols (fresh); index: /tmp/plannotator/atlas.sqlite",
     );
+  });
+
+});
+
+describe("Atlas command arguments", () => {
+  test("parses a path and portable index override", () => {
+    expect(parseAtlasCommandArgs([
+      "--index-path",
+      ".cache/atlas.sqlite3",
+      "./repo",
+    ])).toEqual({
+      rootPath: "./repo",
+      indexPath: ".cache/atlas.sqlite3",
+    });
+  });
+
+  test("allows an index path override for explore", () => {
+    expect(parseAtlasCommandArgs([
+      "/repo",
+      "--index-path",
+      "/indexes/repo.sqlite3",
+    ])).toEqual({
+      rootPath: "/repo",
+      indexPath: "/indexes/repo.sqlite3",
+    });
+  });
+
+  test("rejects incomplete, duplicate, and unsupported options", () => {
+    expect(() => parseAtlasCommandArgs(["--index-path"]))
+      .toThrow("--index-path requires");
+    expect(() => parseAtlasCommandArgs(["one", "two"]))
+      .toThrow("Only one repository");
+    expect(() => parseAtlasCommandArgs(["--wat"]))
+      .toThrow("Unknown option");
   });
 });
 

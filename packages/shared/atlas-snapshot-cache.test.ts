@@ -1,5 +1,13 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import {
+	existsSync,
+	mkdirSync,
+	mkdtempSync,
+	readFileSync,
+	realpathSync,
+	rmSync,
+	writeFileSync,
+} from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { spawnSync } from "node:child_process";
@@ -7,8 +15,9 @@ import type { AtlasSnapshot } from "./atlas";
 import {
 	ATLAS_SNAPSHOT_CACHE_SCHEMA_VERSION,
 	createAtlasRepositoryFingerprint,
-	getDefaultAtlasSnapshotCachePath,
+	getDefaultAtlasIndexPath,
 	openAtlasSnapshotCache,
+	resolveAtlasIndexPath,
 	type AtlasSnapshotCache,
 } from "./atlas-snapshot-cache";
 
@@ -21,10 +30,9 @@ function temporaryDirectory(): string {
 	return directory;
 }
 
-function snapshot(rootPath: string): AtlasSnapshot {
+function snapshot(_rootPath: string): AtlasSnapshot {
 	return {
-		version: 3,
-		rootPath: realpathSync.native(rootPath),
+		version: 4,
 		rootName: "repository",
 		rootId: "root",
 		generatedAt: "2026-07-26T12:00:00.000Z",
@@ -59,12 +67,15 @@ function validateSnapshot(value: unknown): value is AtlasSnapshot {
 	return (
 		typeof value === "object" &&
 		value !== null &&
-		(value as { version?: unknown }).version === 3
+		(value as { version?: unknown }).version === 4
 	);
 }
 
 async function cacheAt(databasePath: string): Promise<AtlasSnapshotCache> {
-	const cache = await openAtlasSnapshotCache({ databasePath });
+	const cache = await openAtlasSnapshotCache({
+		rootPath: temporaryDirectory(),
+		indexPath: databasePath,
+	});
 	openCaches.push(cache);
 	return cache;
 }
@@ -96,15 +107,14 @@ describe("AtlasSnapshotCache", () => {
 		expect(first).not.toBe(changed);
 	});
 
-	test("stores and reads a snapshot by canonical root, fingerprint, and version", async () => {
+	test("stores and reads a portable snapshot by fingerprint and version", async () => {
 		const directory = temporaryDirectory();
 		const root = join(directory, "repo");
 		mkdirSync(root);
 		const cache = await cacheAt(join(directory, "cache", "atlas.sqlite3"));
 		const key = {
-			rootPath: join(root, "."),
 			repositoryFingerprint: "sha256:repository-a",
-			snapshotVersion: 3,
+			snapshotVersion: 4,
 		};
 		const value = snapshot(root);
 
@@ -115,7 +125,7 @@ describe("AtlasSnapshotCache", () => {
 			repositoryFingerprint: key.repositoryFingerprint,
 			createdAt: expect.any(String),
 		});
-		expect(cache.getLatest(root, 3, validateSnapshot)).toEqual({
+		expect(cache.getLatest(4, validateSnapshot)).toEqual({
 			snapshot: value,
 			repositoryFingerprint: key.repositoryFingerprint,
 			createdAt: expect.any(String),
@@ -124,7 +134,7 @@ describe("AtlasSnapshotCache", () => {
 			...key,
 			repositoryFingerprint: "sha256:repository-b",
 		}, validateSnapshot)).toBeNull();
-		expect(cache.get({ ...key, snapshotVersion: 4 }, validateSnapshot)).toBeNull();
+		expect(cache.get({ ...key, snapshotVersion: 5 }, validateSnapshot)).toBeNull();
 	});
 
 	test("replaces stale fingerprints for the same repository and snapshot version", async () => {
@@ -133,9 +143,8 @@ describe("AtlasSnapshotCache", () => {
 		mkdirSync(root);
 		const cache = await cacheAt(join(directory, "atlas.sqlite3"));
 		const firstKey = {
-			rootPath: root,
 			repositoryFingerprint: "sha256:first",
-			snapshotVersion: 3,
+			snapshotVersion: 4,
 		};
 		const secondKey = { ...firstKey, repositoryFingerprint: "sha256:second" };
 
@@ -143,7 +152,7 @@ describe("AtlasSnapshotCache", () => {
 		expect(cache.set(secondKey, snapshot(root))).toBe(true);
 		expect(cache.get(firstKey, validateSnapshot)).toBeNull();
 		expect(cache.get(secondKey, validateSnapshot)?.snapshot).toEqual(snapshot(root));
-		expect(cache.getLatest(root, 3, validateSnapshot)?.repositoryFingerprint)
+		expect(cache.getLatest(4, validateSnapshot)?.repositoryFingerprint)
 			.toBe(secondKey.repositoryFingerprint);
 	});
 
@@ -153,32 +162,27 @@ describe("AtlasSnapshotCache", () => {
 		mkdirSync(root);
 		const cache = await cacheAt(join(directory, "atlas.sqlite3"));
 		const key = {
-			rootPath: root,
 			repositoryFingerprint: "sha256:repository",
-			snapshotVersion: 3,
+			snapshotVersion: 4,
 		};
 		expect(cache.set(key, snapshot(root))).toBe(true);
 		expect(cache.get(key, (_value): _value is AtlasSnapshot => false)).toBeNull();
-		expect(cache.getLatest(root, 3, validateSnapshot)).toBeNull();
+		expect(cache.getLatest(4, validateSnapshot)).toBeNull();
 	});
 
 	test("rejects mismatched snapshot metadata", async () => {
 		const directory = temporaryDirectory();
 		const root = join(directory, "repo");
-		const otherRoot = join(directory, "other");
 		mkdirSync(root);
-		mkdirSync(otherRoot);
 		const cache = await cacheAt(join(directory, "atlas.sqlite3"));
 		const key = {
-			rootPath: root,
 			repositoryFingerprint: "sha256:repository",
-			snapshotVersion: 3,
+			snapshotVersion: 4,
 		};
 
-		expect(cache.set(key, snapshot(otherRoot))).toBe(false);
 		expect(cache.set(key, {
 			...snapshot(root),
-			version: 4,
+			version: 5,
 		} as unknown as AtlasSnapshot)).toBe(false);
 		expect(cache.set({ ...key, repositoryFingerprint: "" }, snapshot(root))).toBe(false);
 		expect(cache.get(key, validateSnapshot)).toBeNull();
@@ -191,9 +195,8 @@ describe("AtlasSnapshotCache", () => {
 		mkdirSync(root);
 		const cache = await cacheAt(databasePath);
 		const key = {
-			rootPath: root,
 			repositoryFingerprint: "sha256:repository",
-			snapshotVersion: 3,
+			snapshotVersion: 4,
 		};
 		expect(cache.set(key, snapshot(root))).toBe(true);
 
@@ -209,7 +212,7 @@ describe("AtlasSnapshotCache", () => {
 		], { encoding: "utf8" });
 		expect(mutation.status).toBe(0);
 		expect(cache.get(key, validateSnapshot)).toBeNull();
-		expect(cache.getLatest(root, 3, validateSnapshot)).toBeNull();
+		expect(cache.getLatest(4, validateSnapshot)).toBeNull();
 	});
 
 	test("creates a database Node can read after Bun writes it", async () => {
@@ -219,11 +222,13 @@ describe("AtlasSnapshotCache", () => {
 		mkdirSync(root);
 		const cache = await cacheAt(databasePath);
 		const key = {
-			rootPath: root,
 			repositoryFingerprint: "sha256:repository",
-			snapshotVersion: 3,
+			snapshotVersion: 4,
 		};
 		expect(cache.set(key, snapshot(root))).toBe(true);
+		expect(existsSync(`${databasePath}-wal`)).toBe(false);
+		expect(readFileSync(databasePath).includes(Buffer.from(realpathSync.native(root))))
+			.toBe(false);
 		cache.close();
 
 		const read = spawnSync("node", [
@@ -252,9 +257,8 @@ describe("AtlasSnapshotCache", () => {
 		writeFileSync(databasePath, "not a sqlite database");
 		const cache = await cacheAt(databasePath);
 		const key = {
-			rootPath: root,
 			repositoryFingerprint: "sha256:repository",
-			snapshotVersion: 3,
+			snapshotVersion: 4,
 		};
 
 		expect(cache.available).toBe(false);
@@ -282,18 +286,44 @@ describe("AtlasSnapshotCache", () => {
 
 		const cache = await cacheAt(databasePath);
 		const key = {
-			rootPath: root,
 			repositoryFingerprint: "sha256:repository",
-			snapshotVersion: 3,
+			snapshotVersion: 4,
 		};
 		expect(cache.available).toBe(true);
 		expect(cache.set(key, snapshot(root))).toBe(true);
 		expect(cache.get(key, validateSnapshot)?.snapshot).toEqual(snapshot(root));
 	});
 
-	test("places the default database below the Plannotator data directory", () => {
-		expect(getDefaultAtlasSnapshotCachePath()).toEndWith(
-			join("atlas", "snapshots.sqlite3"),
+	test("places the default database inside the repository", () => {
+		const root = temporaryDirectory();
+		expect(getDefaultAtlasIndexPath(root)).toBe(
+			join(realpathSync.native(root), ".plannotator", "atlas.sqlite3"),
 		);
+	});
+
+	test("resolves relative and absolute index overrides", () => {
+		const root = temporaryDirectory();
+		expect(resolveAtlasIndexPath(root, "indexes/atlas.sqlite3")).toBe(
+			join(realpathSync.native(root), "indexes", "atlas.sqlite3"),
+		);
+		const external = join(temporaryDirectory(), "atlas.sqlite3");
+		expect(resolveAtlasIndexPath(root, external)).toBe(external);
+	});
+
+	test("uses the environment override when no explicit path is supplied", () => {
+		const root = temporaryDirectory();
+		const previous = process.env.PLANNOTATOR_ATLAS_INDEX_PATH;
+		process.env.PLANNOTATOR_ATLAS_INDEX_PATH = "external/atlas.sqlite3";
+		try {
+			expect(resolveAtlasIndexPath(root)).toBe(
+				join(realpathSync.native(root), "external", "atlas.sqlite3"),
+			);
+			expect(resolveAtlasIndexPath(root, "explicit.sqlite3")).toBe(
+				join(realpathSync.native(root), "explicit.sqlite3"),
+			);
+		} finally {
+			if (previous === undefined) delete process.env.PLANNOTATOR_ATLAS_INDEX_PATH;
+			else process.env.PLANNOTATOR_ATLAS_INDEX_PATH = previous;
+		}
 	});
 });

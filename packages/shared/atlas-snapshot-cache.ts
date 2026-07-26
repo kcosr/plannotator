@@ -1,12 +1,12 @@
 import { createHash } from "node:crypto";
 import { mkdirSync, realpathSync } from "node:fs";
+import { homedir } from "node:os";
 import { dirname, join, resolve } from "node:path";
 import type { AtlasSnapshot } from "./atlas";
-import { getPlannotatorDataDir } from "./data-dir";
 
-export const ATLAS_SNAPSHOT_CACHE_SCHEMA_VERSION = 1;
+export const ATLAS_SNAPSHOT_CACHE_SCHEMA_VERSION = 2;
 
-const DEFAULT_CACHE_FILENAME = "snapshots.sqlite3";
+const DEFAULT_INDEX_PATH = join(".plannotator", "atlas.sqlite3");
 
 interface SqliteStatement {
 	get(...parameters: unknown[]): unknown;
@@ -32,13 +32,11 @@ interface StoredSnapshotRow {
 interface StoredSnapshotEnvelope {
 	cacheSchemaVersion: number;
 	snapshotVersion: number;
-	canonicalRoot: string;
 	repositoryFingerprint: string;
 	snapshot: unknown;
 }
 
 export interface AtlasSnapshotCacheKey {
-	rootPath: string;
 	repositoryFingerprint: string;
 	snapshotVersion: number;
 }
@@ -57,15 +55,12 @@ export interface AtlasRepositoryFingerprintEntry {
 }
 
 export interface OpenAtlasSnapshotCacheOptions {
-	databasePath?: string;
+	rootPath: string;
+	indexPath?: string;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
 	return value !== null && typeof value === "object" && !Array.isArray(value);
-}
-
-function canonicalRoot(rootPath: string): string {
-	return realpathSync.native(resolve(rootPath));
 }
 
 function normalizedRepositoryPath(path: string): string {
@@ -91,25 +86,21 @@ function isStoredSnapshotRow(value: unknown): value is StoredSnapshotRow {
 
 function isStoredSnapshotEnvelope(
 	value: unknown,
-	key: Omit<AtlasSnapshotCacheKey, "rootPath"> & { canonicalRoot: string },
+	key: AtlasSnapshotCacheKey,
 ): value is StoredSnapshotEnvelope {
 	if (
 		!isRecord(value) ||
 		value.cacheSchemaVersion !== ATLAS_SNAPSHOT_CACHE_SCHEMA_VERSION ||
 		value.snapshotVersion !== key.snapshotVersion ||
-		value.canonicalRoot !== key.canonicalRoot ||
 		value.repositoryFingerprint !== key.repositoryFingerprint ||
 		!isRecord(value.snapshot)
 	) return false;
-	return (
-		value.snapshot.version === key.snapshotVersion &&
-		value.snapshot.rootPath === key.canonicalRoot
-	);
+	return value.snapshot.version === key.snapshotVersion;
 }
 
 function initializeSchema(database: SqliteDatabase): void {
 	database.exec(`
-		PRAGMA journal_mode = WAL;
+		PRAGMA journal_mode = DELETE;
 		PRAGMA synchronous = NORMAL;
 		PRAGMA busy_timeout = 2000;
 		CREATE TABLE IF NOT EXISTS atlas_cache_metadata (
@@ -138,13 +129,11 @@ function initializeSchema(database: SqliteDatabase): void {
 	`).run(String(ATLAS_SNAPSHOT_CACHE_SCHEMA_VERSION));
 	database.exec(`
 		CREATE TABLE IF NOT EXISTS atlas_snapshots (
-			canonical_root TEXT NOT NULL,
 			repository_fingerprint TEXT NOT NULL,
 			snapshot_version INTEGER NOT NULL,
 			snapshot_json TEXT NOT NULL,
 			created_at TEXT NOT NULL,
 			PRIMARY KEY (
-				canonical_root,
 				repository_fingerprint,
 				snapshot_version
 			)
@@ -164,8 +153,28 @@ async function sqliteDatabaseConstructor(): Promise<SqliteDatabaseConstructor> {
 	return module.DatabaseSync as unknown as SqliteDatabaseConstructor;
 }
 
-export function getDefaultAtlasSnapshotCachePath(): string {
-	return join(getPlannotatorDataDir(), "atlas", DEFAULT_CACHE_FILENAME);
+function expandHome(filePath: string): string {
+	if (filePath === "~") return homedir();
+	if (filePath.startsWith("~/") || filePath.startsWith("~\\")) {
+		return join(homedir(), filePath.slice(2));
+	}
+	return filePath;
+}
+
+export function getDefaultAtlasIndexPath(rootPath: string): string {
+	return join(realpathSync.native(resolve(rootPath)), DEFAULT_INDEX_PATH);
+}
+
+export function resolveAtlasIndexPath(
+	rootPath: string,
+	explicitPath?: string,
+): string {
+	const canonicalRoot = realpathSync.native(resolve(rootPath));
+	const configuredPath =
+		explicitPath?.trim() || process.env.PLANNOTATOR_ATLAS_INDEX_PATH?.trim();
+	if (!configuredPath) return join(canonicalRoot, DEFAULT_INDEX_PATH);
+	const expanded = expandHome(configuredPath);
+	return resolve(canonicalRoot, expanded);
 }
 
 /**
@@ -201,36 +210,34 @@ export function createAtlasRepositoryFingerprint(
 }
 
 export class AtlasSnapshotCache {
-	readonly databasePath: string;
+	readonly indexPath: string;
 	readonly available: boolean;
 	readonly initializationError?: string;
 
 	#database: SqliteDatabase | null;
 
 	private constructor(
-		databasePath: string,
+		indexPath: string,
 		database: SqliteDatabase | null,
 		initializationError?: string,
 	) {
-		this.databasePath = databasePath;
+		this.indexPath = indexPath;
 		this.#database = database;
 		this.available = database !== null;
 		this.initializationError = initializationError;
 	}
 
 	static async open(
-		options: OpenAtlasSnapshotCacheOptions = {},
+		options: OpenAtlasSnapshotCacheOptions,
 	): Promise<AtlasSnapshotCache> {
-		const databasePath = resolve(
-			options.databasePath ?? getDefaultAtlasSnapshotCachePath(),
-		);
+		const indexPath = resolveAtlasIndexPath(options.rootPath, options.indexPath);
 		let database: SqliteDatabase | null = null;
 		try {
-			mkdirSync(dirname(databasePath), { recursive: true });
+			mkdirSync(dirname(indexPath), { recursive: true });
 			const Database = await sqliteDatabaseConstructor();
-			database = new Database(databasePath);
+			database = new Database(indexPath);
 			initializeSchema(database);
-			return new AtlasSnapshotCache(databasePath, database);
+			return new AtlasSnapshotCache(indexPath, database);
 		} catch (error) {
 			try {
 				database?.close();
@@ -238,7 +245,7 @@ export class AtlasSnapshotCache {
 				// The cache remains disabled after an initialization failure.
 			}
 			return new AtlasSnapshotCache(
-				databasePath,
+				indexPath,
 				null,
 				error instanceof Error ? error.message : String(error),
 			);
@@ -251,26 +258,19 @@ export class AtlasSnapshotCache {
 	): AtlasSnapshotCacheEntry | null {
 		if (!this.#database || !validKey(key)) return null;
 		try {
-			const canonical = canonicalRoot(key.rootPath);
 			const row = this.#database.prepare(`
 				SELECT repository_fingerprint, snapshot_json, created_at
 				FROM atlas_snapshots
-				WHERE canonical_root = ?
-					AND repository_fingerprint = ?
+				WHERE repository_fingerprint = ?
 					AND snapshot_version = ?
-			`).get(canonical, key.repositoryFingerprint, key.snapshotVersion);
-			return this.#parseEntry(row, {
-				canonicalRoot: canonical,
-				repositoryFingerprint: key.repositoryFingerprint,
-				snapshotVersion: key.snapshotVersion,
-			}, validateSnapshot);
+			`).get(key.repositoryFingerprint, key.snapshotVersion);
+			return this.#parseEntry(row, key, validateSnapshot);
 		} catch {
 			return null;
 		}
 	}
 
 	getLatest(
-		rootPath: string,
 		snapshotVersion: number,
 		validateSnapshot: AtlasSnapshotValidator,
 	): AtlasSnapshotCacheEntry | null {
@@ -280,17 +280,15 @@ export class AtlasSnapshotCache {
 			snapshotVersion < 1
 		) return null;
 		try {
-			const canonical = canonicalRoot(rootPath);
 			const row = this.#database.prepare(`
 				SELECT repository_fingerprint, snapshot_json, created_at
 				FROM atlas_snapshots
-				WHERE canonical_root = ? AND snapshot_version = ?
+				WHERE snapshot_version = ?
 				ORDER BY created_at DESC
 				LIMIT 1
-			`).get(canonical, snapshotVersion);
+			`).get(snapshotVersion);
 			if (!isStoredSnapshotRow(row)) return null;
 			return this.#parseEntry(row, {
-				canonicalRoot: canonical,
 				repositoryFingerprint: row.repository_fingerprint,
 				snapshotVersion,
 			}, validateSnapshot);
@@ -302,15 +300,10 @@ export class AtlasSnapshotCache {
 	set(key: AtlasSnapshotCacheKey, snapshot: AtlasSnapshot): boolean {
 		if (!this.#database || !validKey(key) || !isRecord(snapshot)) return false;
 		try {
-			const canonical = canonicalRoot(key.rootPath);
-			if (
-				snapshot.version !== key.snapshotVersion ||
-				snapshot.rootPath !== canonical
-			) return false;
+			if (snapshot.version !== key.snapshotVersion) return false;
 			const envelope: StoredSnapshotEnvelope = {
 				cacheSchemaVersion: ATLAS_SNAPSHOT_CACHE_SCHEMA_VERSION,
 				snapshotVersion: key.snapshotVersion,
-				canonicalRoot: canonical,
 				repositoryFingerprint: key.repositoryFingerprint,
 				snapshot,
 			};
@@ -319,18 +312,16 @@ export class AtlasSnapshotCache {
 			try {
 				this.#database.prepare(`
 					DELETE FROM atlas_snapshots
-					WHERE canonical_root = ? AND snapshot_version = ?
-				`).run(canonical, key.snapshotVersion);
+					WHERE snapshot_version = ?
+				`).run(key.snapshotVersion);
 				this.#database.prepare(`
 					INSERT INTO atlas_snapshots (
-						canonical_root,
 						repository_fingerprint,
 						snapshot_version,
 						snapshot_json,
 						created_at
-					) VALUES (?, ?, ?, ?, ?)
+					) VALUES (?, ?, ?, ?)
 				`).run(
-					canonical,
 					key.repositoryFingerprint,
 					key.snapshotVersion,
 					serialized,
@@ -347,13 +338,10 @@ export class AtlasSnapshotCache {
 		}
 	}
 
-	deleteRoot(rootPath: string): boolean {
+	deleteAll(): boolean {
 		if (!this.#database) return false;
 		try {
-			const canonical = canonicalRoot(rootPath);
-			this.#database.prepare(
-				"DELETE FROM atlas_snapshots WHERE canonical_root = ?",
-			).run(canonical);
+			this.#database.prepare("DELETE FROM atlas_snapshots").run();
 			return true;
 		} catch {
 			return false;
@@ -371,16 +359,14 @@ export class AtlasSnapshotCache {
 	}
 
 	#deleteEntry(
-		canonical: string,
-		key: Pick<AtlasSnapshotCacheKey, "repositoryFingerprint" | "snapshotVersion">,
+		key: AtlasSnapshotCacheKey,
 	): void {
 		try {
 			this.#database?.prepare(`
 				DELETE FROM atlas_snapshots
-				WHERE canonical_root = ?
-					AND repository_fingerprint = ?
+				WHERE repository_fingerprint = ?
 					AND snapshot_version = ?
-			`).run(canonical, key.repositoryFingerprint, key.snapshotVersion);
+			`).run(key.repositoryFingerprint, key.snapshotVersion);
 		} catch {
 			// A corrupt entry is already a cache miss; cleanup is best effort.
 		}
@@ -388,7 +374,7 @@ export class AtlasSnapshotCache {
 
 	#parseEntry(
 		value: unknown,
-		key: Omit<AtlasSnapshotCacheKey, "rootPath"> & { canonicalRoot: string },
+		key: AtlasSnapshotCacheKey,
 		validateSnapshot: AtlasSnapshotValidator,
 	): AtlasSnapshotCacheEntry | null {
 		if (!isStoredSnapshotRow(value)) return null;
@@ -399,7 +385,7 @@ export class AtlasSnapshotCache {
 				!isStoredSnapshotEnvelope(envelope, key) ||
 				!validateSnapshot(envelope.snapshot)
 			) {
-				this.#deleteEntry(key.canonicalRoot, key);
+				this.#deleteEntry(key);
 				return null;
 			}
 			return {
@@ -408,14 +394,14 @@ export class AtlasSnapshotCache {
 				createdAt: value.created_at,
 			};
 		} catch {
-			this.#deleteEntry(key.canonicalRoot, key);
+			this.#deleteEntry(key);
 			return null;
 		}
 	}
 }
 
 export function openAtlasSnapshotCache(
-	options: OpenAtlasSnapshotCacheOptions = {},
+	options: OpenAtlasSnapshotCacheOptions,
 ): Promise<AtlasSnapshotCache> {
 	return AtlasSnapshotCache.open(options);
 }

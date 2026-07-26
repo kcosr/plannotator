@@ -371,7 +371,6 @@ describe("Context builders", () => {
     const ctx: AIContext = {
       mode: "codebase-atlas",
       atlas: {
-        rootPath: "/workspace/plannotator",
         rootName: "plannotator",
         annotations: "- packages/atlas/SourceView.tsx: inspect selection handling",
       },
@@ -379,7 +378,7 @@ describe("Context builders", () => {
     const prompt = buildSystemPrompt(ctx);
     expect(prompt).toContain("Codebase Atlas");
     expect(prompt).toContain("Name: plannotator");
-    expect(prompt).toContain("Root: /workspace/plannotator");
+    expect(prompt).not.toContain("/workspace/plannotator");
     expect(prompt).toContain("inspect selection handling");
     expect(prompt).toContain("selected ranges");
     expect(prompt).toContain("user's messages");
@@ -421,7 +420,6 @@ describe("Context builders", () => {
     const preamble = buildForkPreamble({
       mode: "codebase-atlas",
       atlas: {
-        rootPath: "/repo",
         rootName: "example",
         annotations: "- src/main.ts: clarify startup flow",
       },
@@ -429,7 +427,7 @@ describe("Context builders", () => {
     });
     expect(preamble).toContain("exploring a codebase in Plannotator");
     expect(preamble).toContain("Name: example");
-    expect(preamble).toContain("Root: /repo");
+    expect(preamble).not.toContain("Root:");
     expect(preamble).toContain("clarify startup flow");
     expect(preamble).not.toContain("reviewing your work");
   });
@@ -450,7 +448,7 @@ describe("Context builders", () => {
       { mode: "plan-review", plan: { plan: "# Plan" } },
       { mode: "code-review", review: { patch: "+x" } },
       { mode: "annotate", annotate: { content: "# Doc", filePath: "/x.md" } },
-      { mode: "codebase-atlas", atlas: { rootPath: "/repo", rootName: "repo" } },
+      { mode: "codebase-atlas", atlas: { rootName: "repo" } },
     ];
     for (const ctx of modes) {
       const prompt = buildSystemPrompt(ctx);

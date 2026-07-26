@@ -19,7 +19,7 @@ import { classifyJavaScriptTestRanges } from "./atlas-test-classification-js";
 
 const execFileAsync = promisify(execFile);
 
-export const ATLAS_SNAPSHOT_VERSION = 3;
+export const ATLAS_SNAPSHOT_VERSION = 4;
 
 export type AtlasNodeKind = "root" | "directory" | "file";
 
@@ -96,7 +96,6 @@ export interface AtlasSummary {
 
 export interface AtlasSnapshot {
 	version: typeof ATLAS_SNAPSHOT_VERSION;
-	rootPath: string;
 	rootName: string;
 	rootId: string;
 	generatedAt: string;
@@ -183,6 +182,7 @@ const RESOLVABLE_EXTENSIONS = [
 const EXCLUDED_DIRECTORY_NAMES = new Set([
 	".git",
 	".hg",
+	".plannotator",
 	".svn",
 	".cache",
 	".next",
@@ -996,7 +996,6 @@ export async function buildAtlasSnapshot(
 
 	return {
 		version: ATLAS_SNAPSHOT_VERSION,
-		rootPath: resolvedRoot,
 		rootName: rootNode.name,
 		rootId: rootNode.id,
 		generatedAt: new Date().toISOString(),
