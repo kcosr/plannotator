@@ -66,9 +66,53 @@ function languageLabel(language: string): string {
   return labels[language] ?? language;
 }
 
-type Relationship = 'selected' | 'incoming' | 'outgoing' | 'both' | 'unrelated' | undefined;
+export type BlockMapDependencyRelationship =
+  | 'selected'
+  | 'incoming'
+  | 'outgoing'
+  | 'both'
+  | 'unrelated'
+  | undefined;
 
-interface BlockMapProps {
+export type BlockMapImpactRelationship =
+  | 'direct'
+  | 'impacted'
+  | 'caller'
+  | 'callee'
+  | 'reference';
+
+export interface BlockMapChangeMetrics {
+  additions: number;
+  deletions: number;
+  changedLines?: number;
+  changedSymbols?: number;
+  changedFiles?: number;
+}
+
+export interface BlockMapNodeOverlay {
+  changes?: BlockMapChangeMetrics;
+  /** Explicit heat intensity from 0 to 1. Derived from changed lines when omitted. */
+  intensity?: number;
+  /** True only for nodes directly touched by the changeset, not inferred impact. */
+  directChange?: boolean;
+  relationship?: BlockMapImpactRelationship;
+}
+
+export interface BlockMapOverlay {
+  nodes: ReadonlyMap<string, BlockMapNodeOverlay>;
+  /** Fade nodes with no overlay entry while preserving their spatial context. */
+  dimUnspecified?: boolean;
+  /** Show compact additions/deletions labels when a block has enough room. */
+  showMetrics?: boolean;
+}
+
+export interface BlockMapActivation {
+  kind: 'select' | 'open';
+  node: AtlasNode;
+  overlay?: BlockMapNodeOverlay;
+}
+
+export interface BlockMapProps {
   nodes: AtlasNode[];
   root: AtlasNode;
   codeFilter: CodeFilter;
@@ -76,9 +120,15 @@ interface BlockMapProps {
   colorMetric: ColorMetric;
   query: string;
   selectedId: string | null;
-  relationships?: Map<string, Relationship>;
-  onSelect: (node: AtlasNode) => void;
-  onOpen: (node: AtlasNode) => void;
+  relationships?: ReadonlyMap<string, BlockMapDependencyRelationship>;
+  overlay?: BlockMapOverlay;
+  /**
+   * Own block navigation in an embedded view. When provided, the legacy
+   * select/open callbacks are not called.
+   */
+  onActivate?: (activation: BlockMapActivation) => void;
+  onSelect?: (node: AtlasNode) => void;
+  onOpen?: (node: AtlasNode) => void;
 }
 
 interface RenderBlock {
@@ -89,6 +139,48 @@ interface RenderBlock {
   height: number;
   depth: number;
   container: boolean;
+}
+
+interface ResolvedBlockMapNodeOverlay extends BlockMapNodeOverlay {
+  intensity: number;
+  changedLines: number;
+}
+
+function finiteNonNegative(value: number | undefined): number {
+  return Number.isFinite(value) ? Math.max(0, value ?? 0) : 0;
+}
+
+export function blockMapChangedLines(changes: BlockMapChangeMetrics | undefined): number {
+  if (!changes) return 0;
+  if (changes.changedLines !== undefined) return finiteNonNegative(changes.changedLines);
+  return finiteNonNegative(changes.additions) + finiteNonNegative(changes.deletions);
+}
+
+export function blockMapOverlayMaximum(overlay: BlockMapOverlay | undefined): number {
+  if (!overlay) return 0;
+  let maximum = 0;
+  for (const nodeOverlay of overlay.nodes.values()) {
+    maximum = Math.max(maximum, blockMapChangedLines(nodeOverlay.changes));
+  }
+  return maximum;
+}
+
+export function resolveBlockMapNodeOverlay(
+  overlay: BlockMapOverlay | undefined,
+  nodeId: string,
+  maximumChangedLines = blockMapOverlayMaximum(overlay),
+): ResolvedBlockMapNodeOverlay | undefined {
+  const nodeOverlay = overlay?.nodes.get(nodeId);
+  if (!nodeOverlay) return undefined;
+  const changedLines = blockMapChangedLines(nodeOverlay.changes);
+  const derivedIntensity = maximumChangedLines > 0
+    ? Math.sqrt(changedLines / maximumChangedLines)
+    : 0;
+  const intensity = Math.min(
+    1,
+    Math.max(0, Number.isFinite(nodeOverlay.intensity) ? nodeOverlay.intensity! : derivedIntensity),
+  );
+  return { ...nodeOverlay, intensity, changedLines };
 }
 
 function createBlocks(
@@ -149,6 +241,8 @@ export const BlockMap = memo(function BlockMap({
   query,
   selectedId,
   relationships,
+  overlay,
+  onActivate,
   onSelect,
   onOpen,
 }: BlockMapProps) {
@@ -179,6 +273,7 @@ export const BlockMap = memo(function BlockMap({
       .slice(0, 4)
       .map(([language]) => language);
   }, [nodes, codeFilter]);
+  const maximumChangedLines = useMemo(() => blockMapOverlayMaximum(overlay), [overlay]);
   const normalizedQuery = query.trim().toLowerCase();
 
   return (
@@ -188,7 +283,12 @@ export const BlockMap = memo(function BlockMap({
         const tiny = blockWidth < 52 || blockHeight < 30;
         const matches = !normalizedQuery || node.path.toLowerCase().includes(normalizedQuery);
         const relationship = relationships?.get(node.id);
-        const dimmed = !matches || relationship === 'unrelated';
+        const nodeOverlay = resolveBlockMapNodeOverlay(overlay, node.id, maximumChangedLines);
+        const overlayRelationship = nodeOverlay?.relationship;
+        const dimmed =
+          !matches
+          || relationship === 'unrelated'
+          || Boolean(overlay?.dimUnspecified && !nodeOverlay);
         const rawValue = filteredMetric(node, codeFilter, sizeMetric);
         const value = sizeMetric === 'bytes' ? formatBytes(rawValue) : formatNumber(rawValue);
         const lines = filteredLines(node, codeFilter);
@@ -198,7 +298,7 @@ export const BlockMap = memo(function BlockMap({
             role="treeitem"
             aria-label={`${node.kind} ${node.path}, ${value} ${sizeMetric}`}
             key={`${node.id}:${depth}`}
-            className={`atlas-block atlas-block--${node.kind} atlas-block--${relationship ?? 'normal'}${container ? ' is-container' : ''}${selectedId === node.id ? ' is-selected' : ''}${dimmed ? ' is-dimmed' : ''}`}
+            className={`atlas-block atlas-block--${node.kind} atlas-block--${relationship ?? 'normal'}${overlayRelationship ? ` atlas-block--impact-${overlayRelationship}` : ''}${nodeOverlay ? ' has-change-overlay' : ''}${nodeOverlay?.directChange ? ' is-direct-change' : ''}${container ? ' is-container' : ''}${selectedId === node.id ? ' is-selected' : ''}${dimmed ? ' is-dimmed' : ''}`}
             style={{
               left: x + 1,
               top: y + 1,
@@ -206,16 +306,21 @@ export const BlockMap = memo(function BlockMap({
               height: Math.max(0, blockHeight - 2),
               zIndex: depth + 1,
               '--block-color': nodeColor(node, codeFilter, colorMetric, maxColorValueByDepth.get(depth) ?? 1),
+              ...(nodeOverlay && {
+                '--change-intensity': `${Math.round(nodeOverlay.intensity * 72)}%`,
+              }),
             } as React.CSSProperties}
             onClick={(event) => {
               event.stopPropagation();
-              onSelect(node);
+              if (onActivate) onActivate({ kind: 'select', node, overlay: nodeOverlay });
+              else onSelect?.(node);
             }}
             onDoubleClick={(event) => {
               event.stopPropagation();
-              onOpen(node);
+              if (onActivate) onActivate({ kind: 'open', node, overlay: nodeOverlay });
+              else onOpen?.(node);
             }}
-            title={`${node.path}\n${formatNumber(lines)} ${codeFilterLabel(codeFilter)} lines · ${formatBytes(filteredMetric(node, codeFilter, 'bytes'))} · complexity ${formatNumber(filteredComplexity(node, codeFilter))}`}
+            title={`${node.path}\n${formatNumber(lines)} ${codeFilterLabel(codeFilter)} lines · ${formatBytes(filteredMetric(node, codeFilter, 'bytes'))} · complexity ${formatNumber(filteredComplexity(node, codeFilter))}${nodeOverlay?.changes ? `\nChanges: +${formatNumber(finiteNonNegative(nodeOverlay.changes.additions))} −${formatNumber(finiteNonNegative(nodeOverlay.changes.deletions))}${nodeOverlay.changes.changedSymbols !== undefined ? ` · ${formatNumber(finiteNonNegative(nodeOverlay.changes.changedSymbols))} symbols` : ''}` : ''}`}
           >
             {!tiny && (
               <span className="atlas-block__title">
@@ -227,6 +332,12 @@ export const BlockMap = memo(function BlockMap({
               <span className="atlas-block__meta">
                 {node.language && <span>{node.language}</span>}
                 <span>{value}{sizeMetric === 'lines' ? ' lines' : sizeMetric === 'complexity' ? ' cx' : ''}</span>
+              </span>
+            )}
+            {!compact && overlay?.showMetrics && nodeOverlay?.changes && (
+              <span className="atlas-block__change">
+                +{formatNumber(finiteNonNegative(nodeOverlay.changes.additions))}
+                {' '}−{formatNumber(finiteNonNegative(nodeOverlay.changes.deletions))}
               </span>
             )}
           </button>

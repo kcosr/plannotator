@@ -19,7 +19,6 @@ import {
   Trash2,
   X,
 } from 'lucide-react';
-import { fetchCallHierarchy, fetchReferences, fetchSource } from './api';
 import { callLocationKey, filterCallTargets } from './callHierarchy';
 import { lineMatchesFilter, symbolMatchesFilter } from './codeFilter';
 import { isInspectableSymbol, referencePositionFromToken } from './referencePosition';
@@ -38,7 +37,7 @@ import type {
   SourceFile,
 } from './types';
 
-interface NavigationTarget {
+export interface AtlasSourceNavigationTarget {
   path: string;
   line?: number;
   column?: number;
@@ -46,7 +45,24 @@ interface NavigationTarget {
   selection?: 'line' | 'symbol';
 }
 
-interface SourceViewProps {
+export interface AtlasSourceLoaders {
+  loadSource: (path: string, signal?: AbortSignal) => Promise<SourceFile>;
+  loadReferences: (
+    symbol: string,
+    path: string,
+    line: number,
+    column: number,
+    signal?: AbortSignal,
+  ) => Promise<ReferenceResponse>;
+  loadCalls: (
+    path: string,
+    line: number,
+    column: number,
+    signal?: AbortSignal,
+  ) => Promise<CallHierarchyResponse>;
+}
+
+export interface SourceViewProps {
   node: AtlasNode;
   nodes: AtlasNode[];
   analyzers: AtlasAnalyzers;
@@ -55,13 +71,15 @@ interface SourceViewProps {
   targetSymbol?: string;
   targetSelection?: 'line' | 'symbol';
   codeFilter: CodeFilter;
-  onNavigateFile: (target: NavigationTarget) => void;
+  loaders: AtlasSourceLoaders;
+  onNavigateFile: (target: AtlasSourceNavigationTarget) => void;
   annotations: AtlasAnnotation[];
+  annotationControlsEnabled: boolean;
   aiAvailable: boolean;
-  onAddAnnotation: (draft: AtlasAnnotationDraft) => void;
-  onUpdateAnnotation: (id: string, text: string) => void;
-  onDeleteAnnotation: (id: string) => void;
-  onAskAI: (question: string, draft: AtlasAnnotationDraft) => void;
+  onAddAnnotation?: (draft: AtlasAnnotationDraft) => void;
+  onUpdateAnnotation?: (id: string, text: string) => void;
+  onDeleteAnnotation?: (id: string) => void;
+  onAskAI?: (question: string, draft: AtlasAnnotationDraft) => void;
 }
 
 const PIERRE_SOURCE_CSS = `
@@ -260,14 +278,17 @@ export function SourceView({
   targetSymbol,
   targetSelection,
   codeFilter,
+  loaders,
   onNavigateFile,
   annotations,
+  annotationControlsEnabled,
   aiAvailable,
   onAddAnnotation,
   onUpdateAnnotation,
   onDeleteAnnotation,
   onAskAI,
 }: SourceViewProps) {
+  const { loadSource, loadReferences, loadCalls } = loaders;
   const [source, setSource] = useState<SourceFile | null>(null);
   const [error, setError] = useState('');
   const [loading, setLoading] = useState(true);
@@ -304,7 +325,7 @@ export function SourceView({
     setLoading(true);
     setError('');
     setSource(null);
-    fetchSource(node.path, controller.signal)
+    loadSource(node.path, controller.signal)
       .then(setSource)
       .catch((reason: unknown) => {
         if (!controller.signal.aborted) setError(reason instanceof Error ? reason.message : String(reason));
@@ -313,7 +334,7 @@ export function SourceView({
         if (!controller.signal.aborted) setLoading(false);
       });
     return () => controller.abort();
-  }, [node.path]);
+  }, [loadSource, node.path]);
 
   useEffect(() => {
     setComposeSelection(null);
@@ -403,7 +424,7 @@ export function SourceView({
     referenceRequestRef.current = controller;
     setReferenceState({ symbol: clean, line, column, loading: true, result: null });
     setCallState({ loading: false, result: null });
-    fetchReferences(clean, node.path, line, column, controller.signal)
+    loadReferences(clean, node.path, line, column, controller.signal)
       .then((result) => {
         if (!controller.signal.aborted) {
           setReferenceState({ symbol: clean, line, column, loading: false, result });
@@ -420,7 +441,7 @@ export function SourceView({
           error: reason instanceof Error ? reason.message : String(reason),
         });
       });
-  }, [node.path]);
+  }, [loadReferences, node.path]);
 
   useEffect(() => () => {
     referenceRequestRef.current?.abort();
@@ -434,7 +455,7 @@ export function SourceView({
     if (inspectorMode !== 'calls' || !inspectedSymbol || !inspectedLine || !inspectedColumn) return;
     const controller = new AbortController();
     setCallState({ loading: true, result: null });
-    fetchCallHierarchy(node.path, inspectedLine, inspectedColumn, controller.signal)
+    loadCalls(node.path, inspectedLine, inspectedColumn, controller.signal)
       .then((result) => {
         if (!controller.signal.aborted) setCallState({ loading: false, result });
       })
@@ -448,7 +469,7 @@ export function SourceView({
         }
       });
     return () => controller.abort();
-  }, [inspectorMode, inspectedSymbol, inspectedLine, inspectedColumn, node.path]);
+  }, [inspectorMode, inspectedSymbol, inspectedLine, inspectedColumn, loadCalls, node.path]);
 
   useEffect(() => {
     if (targetSymbol && targetLine && targetColumn) {
@@ -512,8 +533,8 @@ export function SourceView({
   const saveAnnotation = useCallback(() => {
     const draft = annotationDraft();
     if (!draft?.text) return;
-    if (editingAnnotationId) onUpdateAnnotation(editingAnnotationId, draft.text);
-    else onAddAnnotation(draft);
+    if (editingAnnotationId) onUpdateAnnotation?.(editingAnnotationId, draft.text);
+    else onAddAnnotation?.(draft);
     closeComposer();
   }, [
     annotationDraft,
@@ -526,7 +547,7 @@ export function SourceView({
   const askAboutSelection = useCallback(() => {
     const draft = annotationDraft();
     if (!draft?.text || !aiAvailable) return;
-    onAskAI(draft.text, draft);
+    onAskAI?.(draft.text, draft);
     closeComposer();
   }, [aiAvailable, annotationDraft, closeComposer, onAskAI]);
 
@@ -598,7 +619,7 @@ export function SourceView({
           <button type="button" onClick={() => editAnnotation(annotation)} title="Edit annotation">
             <Pencil size={13} />
           </button>
-          <button type="button" onClick={() => onDeleteAnnotation(annotation.id)} title="Delete annotation">
+          <button type="button" onClick={() => onDeleteAnnotation?.(annotation.id)} title="Delete annotation">
             <Trash2 size={13} />
           </button>
         </div>
@@ -611,10 +632,11 @@ export function SourceView({
     themeType: 'system' as const,
     overflow: 'scroll' as const,
     disableFileHeader: true,
-    enableLineSelection: true,
+    enableLineSelection: annotationControlsEnabled || aiAvailable,
     lineHoverHighlight: 'line' as const,
     onLineClick,
     onLineSelectionEnd: (range: SelectedLineRange | null) => {
+      if (!annotationControlsEnabled && !aiAvailable) return;
       if (!range) return;
       setEditingAnnotationId(null);
       setComposeText('');
@@ -623,7 +645,7 @@ export function SourceView({
     onTokenClick,
     onPostRender: applySourceDecorations,
     unsafeCSS: PIERRE_SOURCE_CSS,
-  }), [applySourceDecorations, onLineClick, onTokenClick]);
+  }), [aiAvailable, annotationControlsEnabled, applySourceDecorations, onLineClick, onTokenClick]);
 
   const semanticProvider = analyzers.semantic.providers.find(
     (provider) => provider.language.toLowerCase() === node.language?.toLowerCase(),
@@ -745,7 +767,7 @@ export function SourceView({
               options={pierreOptions}
             />
           )}
-          {composeSelection && (
+          {composeSelection && (annotationControlsEnabled || aiAvailable) && (
             <div className="atlas-source-compose">
               <div className="atlas-source-compose-heading">
                 <span>
@@ -769,10 +791,12 @@ export function SourceView({
                 }}
               />
               <div className="atlas-source-compose-actions">
-                <button type="button" disabled={!composeText.trim()} onClick={saveAnnotation}>
-                  <MessageSquare size={13} />
-                  {editingAnnotationId ? 'Update' : 'Comment'}
-                </button>
+                {annotationControlsEnabled && (
+                  <button type="button" disabled={!composeText.trim()} onClick={saveAnnotation}>
+                    <MessageSquare size={13} />
+                    {editingAnnotationId ? 'Update' : 'Comment'}
+                  </button>
+                )}
                 {!editingAnnotationId && (
                   <button
                     type="button"

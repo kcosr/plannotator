@@ -106,6 +106,7 @@ import { DEMO_TOUR_ID } from './demoTour';
 import { GuideScreen } from './components/guide/GuideScreen';
 import { DEMO_GUIDE_ID } from './demoGuide';
 import { buildPRArtifacts } from './utils/prArtifacts';
+import { ReviewAtlasSurface } from './components/ReviewAtlasSurface';
 
 declare const __APP_VERSION__: string;
 
@@ -125,6 +126,8 @@ interface DiffData {
   prDiffScopeOptions?: PRDiffScopeOption[];
   semanticDiff?: SemanticDiffAdvert;
 }
+
+type ReviewSurface = 'diff' | 'scope' | 'codebase';
 
 function getFileTabTitle(filePath: string): string {
   return filePath.split('/').pop() ?? filePath;
@@ -243,6 +246,7 @@ const ReviewApp: React.FC = () => {
 
   const reviewSidebar = useSidebar<ReviewSidebarTab>(false, 'annotations');
   const [isFileTreeOpen, setIsFileTreeOpen] = useState(true);
+  const [reviewSurface, setReviewSurface] = useState<ReviewSurface>('diff');
   // Guided Review screen takeover — file tree + center dock hidden (dock stays
   // mounted, just CSS-hidden; see the dock wrapper below), right sidebar untouched.
   const [guideOpen, setGuideOpen] = useState(false);
@@ -275,7 +279,7 @@ const ReviewApp: React.FC = () => {
   // discovery from starting before the server reports that AI is enabled.
   const [aiEnabled, setAiEnabled] = useState<boolean | null>(null);
   const aiUIEnabled = aiEnabled === true;
-  const guideVisible = aiUIEnabled && guideOpen;
+  const guideVisible = reviewSurface === 'diff' && aiUIEnabled && guideOpen;
   const [gitUser, setGitUser] = useState<string | undefined>();
   const [isWSL, setIsWSL] = useState(false);
   const [reviewMode, setReviewMode] = useState<string | null>(null);
@@ -456,6 +460,7 @@ const ReviewApp: React.FC = () => {
   const openDiffFile = useCallback((filePath: string) => {
     const file = files.find(candidate => candidate.path === filePath);
     if (!file) return;
+    setReviewSurface('diff');
     semanticDiffAutoFallbackPending.current = false;
 
     if (!dockApi) {
@@ -1189,6 +1194,14 @@ const ReviewApp: React.FC = () => {
   // Global keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
+      if (reviewSurface !== 'diff') {
+        if ((e.metaKey || e.ctrlKey) && e.key === '.' && !isTypingTarget(e.target)) {
+          e.preventDefault();
+          if (reviewSidebar.isOpen) reviewSidebar.close();
+          else reviewSidebar.open();
+        }
+        return;
+      }
       // Cmd/Ctrl+F to focus file search when diff files are available.
       // Bail while the guide takeover is open (file tree isn't rendered) and
       // don't intercept in the Commits view (its rail has no search input) —
@@ -1251,7 +1264,7 @@ const ReviewApp: React.FC = () => {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  }, [showExportModal, showDestinationMenu, isSearchOpen, searchQuery, searchMatches, isSearchPending, openSearch, stepSearchMatch, clearSearch, closeSearch, aiUIEnabled, hasSearchableFiles, showCommitsPanel, reviewSidebar.isOpen, reviewSidebar.open, reviewSidebar.close, isFileTreeOpen, guideOpen]);
+  }, [showExportModal, showDestinationMenu, isSearchOpen, searchQuery, searchMatches, isSearchPending, openSearch, stepSearchMatch, clearSearch, closeSearch, aiUIEnabled, hasSearchableFiles, showCommitsPanel, reviewSidebar.isOpen, reviewSidebar.open, reviewSidebar.close, isFileTreeOpen, guideOpen, reviewSurface]);
 
 
   // Load diff content - try API first, fall back to demo
@@ -1655,7 +1668,7 @@ const ReviewApp: React.FC = () => {
       // be "active" underneath — without this gate, bare `a`/`v` while
       // reading the guide would stage/mark-viewed that hidden file. The
       // guide's own diffs surface visible per-file controls instead.
-      if (guideOpen) return;
+      if (guideOpen || reviewSurface !== 'diff') return;
       if (!isDiffPanelActive) return;
       const filePath = files[activeFileIndex]?.path;
       if (!filePath) return;
@@ -1670,7 +1683,7 @@ const ReviewApp: React.FC = () => {
     };
     window.addEventListener('keydown', handler);
     return () => window.removeEventListener('keydown', handler);
-  }, [files, activeFileIndex, isDiffPanelActive, guideOpen, handleToggleViewed, isPathStageable, stageFile]);
+  }, [files, activeFileIndex, isDiffPanelActive, guideOpen, reviewSurface, handleToggleViewed, isPathStageable, stageFile]);
 
   // Shared function: apply a PR response (used by both initial load and PR switch)
   function applyPRResponse(data: PRSessionUpdate & {
@@ -2287,7 +2300,9 @@ const ReviewApp: React.FC = () => {
     // instances derive `isFocused` from this, so this one line strips their
     // focus claim at the source instead of threading `guideOpen` through every
     // dock panel. Guide-side DiffViewers arbitrate focus among themselves.
-    focusedFilePath: guideOpen ? null : (files[activeFileIndex]?.path ?? null),
+    focusedFilePath: guideOpen || reviewSurface !== 'diff'
+      ? null
+      : (files[activeFileIndex]?.path ?? null),
     diffStyle,
     diffOverflow,
     diffIndicators,
@@ -2398,7 +2413,7 @@ const ReviewApp: React.FC = () => {
     codeNavIsLoading: codeNav.isLoading,
     codeNavActiveSymbol: codeNav.activeSymbol,
   }), [
-    files, diffData?.rawPatch, activeFileIndex, guideOpen, diffStyle, diffOverflow, diffIndicators,
+    files, diffData?.rawPatch, activeFileIndex, guideOpen, reviewSurface, diffStyle, diffOverflow, diffIndicators,
     diffLineDiffType, diffShowLineNumbers, diffShowBackground,
     diffExpandUnchanged, diffFontFamily, diffFontSize, activeDiffBase, committedBase, feedbackDiffContext, prReviewScopeLabel, prDiffScope, agentCwd, canUseLiveWorkspaceActions,
     allAnnotations, externalAnnotations,
@@ -2784,7 +2799,7 @@ const ReviewApp: React.FC = () => {
         {/* Header */}
         <header className="py-1 flex flex-col min-[480px]:flex-row items-stretch min-[480px]:items-center min-[480px]:justify-between gap-1 min-[480px]:gap-0 px-2 lg:px-4 border-b border-border/50 bg-card/50 backdrop-blur-xl z-50">
           <div className="min-w-0 flex flex-1 items-center gap-2 lg:gap-3">
-            {shouldShowFileTree && (
+            {reviewSurface === 'diff' && shouldShowFileTree && (
               <>
                 <button
                   onClick={() => setIsFileTreeOpen(prev => !prev)}
@@ -2800,7 +2815,7 @@ const ReviewApp: React.FC = () => {
                 <div className="w-px h-5 bg-border/50 mx-1 hidden lg:block" />
               </>
             )}
-            {aiUIEnabled && hasSearchableFiles && (
+            {reviewSurface === 'diff' && aiUIEnabled && hasSearchableFiles && (
               <>
                 <button
                   onClick={() => {
@@ -2827,6 +2842,28 @@ const ReviewApp: React.FC = () => {
                 <div className="w-px h-5 bg-border/50 mx-1 hidden lg:block" />
               </>
             )}
+            <div className="review-surface-switcher" role="tablist" aria-label="Review surface">
+              {([
+                ['diff', 'Diff'],
+                ['scope', 'Scope'],
+                ['codebase', 'Codebase'],
+              ] as const).map(([id, label]) => (
+                <button
+                  type="button"
+                  role="tab"
+                  key={id}
+                  aria-selected={reviewSurface === id}
+                  className={reviewSurface === id ? 'is-active' : ''}
+                  onClick={() => {
+                    setReviewSurface(id);
+                    if (id !== 'diff') setGuideOpen(false);
+                  }}
+                >
+                  {label}
+                </button>
+              ))}
+            </div>
+            <div className="w-px h-5 bg-border/50 mx-1 hidden lg:block" />
             {prMetadata ? (
               <div className="min-w-0 flex flex-1 items-center gap-2 lg:gap-3 overflow-hidden">
                 <span
@@ -3233,7 +3270,7 @@ const ReviewApp: React.FC = () => {
 
         {/* Main content */}
         <div className={`flex-1 flex overflow-hidden ${isResizing ? 'select-none' : ''}`}>
-          {!guideOpen && shouldShowFileTree && isFileTreeOpen && sectionsAvailable && panelView === 'sections' && (
+          {reviewSurface === 'diff' && !guideOpen && shouldShowFileTree && isFileTreeOpen && sectionsAvailable && panelView === 'sections' && (
             <div className="contents group/sidebar">
               <SectionsPanel
                 files={files}
@@ -3287,7 +3324,7 @@ const ReviewApp: React.FC = () => {
               <ResizeHandle {...fileTreeResize.handleProps} className="z-10" side="left" hideHoverTrack tooltip={RESIZE_HANDLE_TOOLTIP} onCollapse={() => setIsFileTreeOpen(false)} />
             </div>
           )}
-          {!guideOpen && shouldShowFileTree && isFileTreeOpen && showCommitsPanel && (
+          {reviewSurface === 'diff' && !guideOpen && shouldShowFileTree && isFileTreeOpen && showCommitsPanel && (
             <div className="contents group/sidebar">
               <CommitsPanel
                 width={fileTreeResize.width}
@@ -3307,7 +3344,7 @@ const ReviewApp: React.FC = () => {
               <ResizeHandle {...fileTreeResize.handleProps} className="z-10" side="left" hideHoverTrack tooltip={RESIZE_HANDLE_TOOLTIP} onCollapse={() => setIsFileTreeOpen(false)} />
             </div>
           )}
-          {!guideOpen && shouldShowFileTree && isFileTreeOpen && !(sectionsAvailable && panelView === 'sections') && !showCommitsPanel && (
+          {reviewSurface === 'diff' && !guideOpen && shouldShowFileTree && isFileTreeOpen && !(sectionsAvailable && panelView === 'sections') && !showCommitsPanel && (
             <div className="contents group/sidebar">
               <FileTree
                 files={files}
@@ -3397,8 +3434,17 @@ const ReviewApp: React.FC = () => {
             </div>
           )}
 
+          {reviewSurface !== 'diff' && (
+            <ReviewAtlasSurface
+              mode={reviewSurface}
+              rawPatch={diffData?.rawPatch ?? ''}
+              onOpenDiffFile={openDiffFile}
+              onRequestCodebase={() => setReviewSurface('codebase')}
+            />
+          )}
+
           {/* Center dock area */}
-          <div className={`flex-1 min-w-0 overflow-hidden relative ${guideVisible ? 'hidden' : ''}`}>
+          <div className={`flex-1 min-w-0 overflow-hidden relative ${guideVisible || reviewSurface !== 'diff' ? 'hidden' : ''}`}>
             {/* Commit navigation veil: while a commit switch is in flight (or
                 the view was just entered and HEAD auto-select hasn't landed),
                 cover the stale previous diff instead of letting it sit there

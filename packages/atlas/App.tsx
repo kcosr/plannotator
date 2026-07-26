@@ -28,6 +28,10 @@ import { DocumentAIChatPanel } from '@plannotator/ui/components/ai/DocumentAICha
 import { useAIChat } from '@plannotator/ui/hooks/useAIChat';
 import { useAIProviderConfig } from '@plannotator/ui/hooks/useAIProviderConfig';
 import { BlockMap } from './BlockMap';
+import type {
+  BlockMapActivation,
+  BlockMapOverlay,
+} from './BlockMap';
 import {
   filteredBytes,
   filteredComplexity,
@@ -36,11 +40,18 @@ import {
   symbolMatchesFilter,
 } from './codeFilter';
 import { DirectoryTree } from './DirectoryTree';
-import { SourceView } from './SourceView';
+import {
+  SourceView,
+  type AtlasSourceLoaders,
+  type AtlasSourceNavigationTarget,
+} from './SourceView';
 import { SymbolMap } from './SymbolMap';
 import {
   closeAtlas,
+  fetchCallHierarchy,
+  fetchReferences,
   fetchSnapshot,
+  fetchSource,
   fetchStatus,
   reindexAtlas,
   submitAtlasFeedback,
@@ -67,13 +78,13 @@ const VIEWS: { id: AtlasView; label: string; icon: React.ComponentType<{ size?: 
   { id: 'source', label: 'Source', icon: Code2 },
 ];
 
-interface SourceNavigation {
-  path: string;
-  line?: number;
-  column?: number;
-  symbol?: string;
-  selection?: 'line' | 'symbol';
-}
+const DEFAULT_SOURCE_LOADERS: AtlasSourceLoaders = {
+  loadSource: fetchSource,
+  loadReferences: fetchReferences,
+  loadCalls: fetchCallHierarchy,
+};
+
+export type AtlasWorkspaceSourceTarget = AtlasSourceNavigationTarget;
 
 function descendants(node: AtlasNode, byId: Map<string, AtlasNode>): Set<string> {
   const ids = new Set<string>();
@@ -373,6 +384,308 @@ function DetailInspector({
   );
 }
 
+export interface AtlasWorkspaceProps {
+  snapshot: AtlasSnapshot;
+  view: AtlasView;
+  selectedId: string | null;
+  focusedRootId: string | null;
+  sizeMetric: SizeMetric;
+  colorMetric: ColorMetric;
+  codeFilter: CodeFilter;
+  relationshipsOpen: boolean;
+  query: string;
+  sidebarOpen: boolean;
+  sourceTarget?: AtlasWorkspaceSourceTarget;
+  canNavigateSourceBack: boolean;
+  canNavigateSourceForward: boolean;
+  annotations: AtlasAnnotation[];
+  capabilities: {
+    annotations: boolean;
+    askAI: boolean;
+  };
+  mapOverlay?: BlockMapOverlay;
+  sourceLoaders: AtlasSourceLoaders;
+  onMapActivate?: (activation: BlockMapActivation) => void;
+  onSelectedIdChange: (id: string) => void;
+  onNavigateNode: (node: AtlasNode) => void;
+  onNavigateSource: (target: AtlasWorkspaceSourceTarget) => void;
+  onNavigateSourceBack: () => void;
+  onNavigateSourceForward: () => void;
+  onSizeMetricChange: (metric: SizeMetric) => void;
+  onColorMetricChange: (metric: ColorMetric) => void;
+  onCodeFilterChange: (filter: CodeFilter) => void;
+  onRelationshipsOpenChange: (open: boolean) => void;
+  onQueryChange: (query: string) => void;
+  onSidebarOpenChange: (open: boolean) => void;
+  onAddAnnotation?: (draft: AtlasAnnotationDraft) => void;
+  onUpdateAnnotation?: (id: string, text: string) => void;
+  onDeleteAnnotation?: (id: string) => void;
+  onAskAI?: (question: string, draft: AtlasAnnotationDraft) => void;
+}
+
+/**
+ * Controlled repository workspace shared by standalone Explore and review.
+ *
+ * Session lifecycle, theme, status, feedback submission, and AI chat remain in
+ * the host. This component owns no HTTP routes and performs no direct fetches.
+ */
+export function AtlasWorkspace({
+  snapshot,
+  view,
+  selectedId,
+  focusedRootId,
+  sizeMetric,
+  colorMetric,
+  codeFilter,
+  relationshipsOpen,
+  query,
+  sidebarOpen,
+  sourceTarget,
+  canNavigateSourceBack,
+  canNavigateSourceForward,
+  annotations,
+  capabilities,
+  mapOverlay,
+  sourceLoaders,
+  onMapActivate,
+  onSelectedIdChange,
+  onNavigateNode,
+  onNavigateSource,
+  onNavigateSourceBack,
+  onNavigateSourceForward,
+  onSizeMetricChange,
+  onColorMetricChange,
+  onCodeFilterChange,
+  onRelationshipsOpenChange,
+  onQueryChange,
+  onSidebarOpenChange,
+  onAddAnnotation,
+  onUpdateAnnotation,
+  onDeleteAnnotation,
+  onAskAI,
+}: AtlasWorkspaceProps) {
+  const nodes = snapshot.nodes;
+  const byId = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
+  const root = nodes.find((node) => node.parentId == null) ?? nodes[0];
+  const selectedNode = (selectedId && byId.get(selectedId)) || null;
+  const focusedRoot = (focusedRootId && byId.get(focusedRootId)) || root;
+  const selectedFile = selectedNode?.kind === 'file' ? selectedNode : undefined;
+  const relationshipSelection = selectedNode?.kind === 'root' ? null : selectedNode;
+  const filteredFileCount = nodes.filter(
+    (node) => node.kind === 'file' && nodeMatchesFilter(node, codeFilter),
+  ).length;
+  const filteredLanguageCount = new Set(
+    nodes
+      .filter((node) => node.kind === 'file' && node.language && nodeMatchesFilter(node, codeFilter))
+      .map((node) => node.language),
+  ).size;
+  const relationships = useMemo(
+    () => relationshipMap(nodes, snapshot.dependencies, relationshipSelection),
+    [nodes, relationshipSelection, snapshot.dependencies],
+  );
+
+  if (!root || !focusedRoot) {
+    return (
+      <div className="atlas-empty">
+        <FileCode2 size={28} />
+        <strong>This repository index is empty</strong>
+      </div>
+    );
+  }
+
+  return (
+    <div className={`atlas-shell${sidebarOpen ? '' : ' is-sidebar-closed'}`}>
+      <aside className="atlas-sidebar">
+        <div className="atlas-sidebar-header">
+          <span>Repository</span>
+          <span>{filteredFileCount} files</span>
+        </div>
+        <DirectoryTree
+          nodes={nodes}
+          codeFilter={codeFilter}
+          selectedId={selectedId}
+          focusedRootId={focusedRoot.id}
+          onSelect={onNavigateNode}
+          onFocus={onNavigateNode}
+        />
+        <div className="atlas-sidebar-summary">
+          <span>{formatNumber(filteredLines(root, codeFilter))} lines</span>
+          <span>{formatBytes(filteredBytes(root, codeFilter))}</span>
+          <span>{filteredLanguageCount} languages</span>
+        </div>
+      </aside>
+
+      <section className="atlas-workspace">
+        <div className="atlas-toolbar">
+          <button
+            type="button"
+            className="atlas-icon-button"
+            onClick={() => onSidebarOpenChange(!sidebarOpen)}
+            title={sidebarOpen ? 'Hide repository tree' : 'Show repository tree'}
+          >{sidebarOpen ? <PanelLeftClose size={15} /> : <PanelLeftOpen size={15} />}</button>
+          <CodeFilterControl value={codeFilter} onChange={onCodeFilterChange} />
+          {view === 'overview' && (
+            <button
+              type="button"
+              className={`atlas-toolbar-toggle${relationshipsOpen ? ' is-active' : ''}`}
+              aria-pressed={relationshipsOpen}
+              onClick={() => onRelationshipsOpenChange(!relationshipsOpen)}
+            >
+              <GitBranch size={14} aria-hidden />
+              <span>Relationships</span>
+            </button>
+          )}
+          {view === 'source' ? (
+            <>
+              <button
+                type="button"
+                className="atlas-icon-button"
+                disabled={!canNavigateSourceBack}
+                onClick={onNavigateSourceBack}
+                title="Back"
+              ><ArrowLeft size={15} /></button>
+              <button
+                type="button"
+                className="atlas-icon-button"
+                disabled={!canNavigateSourceForward}
+                onClick={onNavigateSourceForward}
+                title="Forward"
+              ><ArrowRight size={15} /></button>
+            </>
+          ) : (
+            <Breadcrumbs node={focusedRoot} byId={byId} onFocus={onNavigateNode} />
+          )}
+          {view !== 'source' && selectedNode && selectedNode.id !== focusedRoot.id && (
+            <div className="atlas-selection-summary" role="status" aria-live="polite" title={selectedNode.path}>
+              {selectedNode.kind === 'file' ? <FileCode2 size={13} aria-hidden /> : <Columns3 size={13} aria-hidden />}
+              <span>Selected</span>
+              <strong>{selectedNode.path}</strong>
+              <small>{selectedNode.kind} · {formatNumber(filteredLines(selectedNode, codeFilter))} lines</small>
+            </div>
+          )}
+          <div className="atlas-toolbar-spacer" />
+          {view === 'overview' && (
+            <>
+              <label className="atlas-search">
+                <Search size={14} />
+                <input value={query} onChange={(event) => onQueryChange(event.target.value)} placeholder="Find a file" aria-label="Find a file" />
+                {query && <button type="button" onClick={() => onQueryChange('')} title="Clear search"><X size={13} /></button>}
+              </label>
+              <SegmentedSelect
+                label="Size"
+                value={sizeMetric}
+                onChange={onSizeMetricChange}
+                options={[
+                  { value: 'lines', label: 'Lines' },
+                  { value: 'bytes', label: 'Bytes' },
+                  { value: 'complexity', label: 'Complexity' },
+                ]}
+              />
+              <SegmentedSelect
+                label="Color"
+                value={colorMetric}
+                onChange={onColorMetricChange}
+                options={[
+                  { value: 'language', label: 'Language' },
+                  { value: 'complexity', label: 'Complexity' },
+                  { value: 'size', label: 'Size' },
+                ]}
+              />
+            </>
+          )}
+        </div>
+
+        <div className={`atlas-content atlas-content--${view}`}>
+          {view === 'overview' && (
+            <div className={`atlas-overview-layout${relationshipsOpen ? ' is-relationships' : ''}`}>
+              <div className="atlas-overview-map">
+                <BlockMap
+                  nodes={nodes}
+                  root={focusedRoot}
+                  codeFilter={codeFilter}
+                  sizeMetric={sizeMetric}
+                  colorMetric={colorMetric}
+                  query={query}
+                  selectedId={selectedId}
+                  relationships={relationshipsOpen ? relationships : undefined}
+                  overlay={mapOverlay}
+                  onActivate={onMapActivate}
+                  onSelect={relationshipsOpen ? (node) => onSelectedIdChange(node.id) : onNavigateNode}
+                  onOpen={onNavigateNode}
+                />
+                {relationshipsOpen && (
+                  <div className="atlas-relationship-legend">
+                    <span><i className="legend-selected" />Selected</span>
+                    <span><i className="legend-outgoing" />Uses</span>
+                    <span><i className="legend-incoming" />Used by</span>
+                    <span><i className="legend-both" />Both</span>
+                  </div>
+                )}
+              </div>
+              {relationshipsOpen && (
+                <DetailInspector
+                  node={relationshipSelection}
+                  codeFilter={codeFilter}
+                  dependencies={snapshot.dependencies}
+                  byId={byId}
+                  onSelect={(node) => onSelectedIdChange(node.id)}
+                />
+              )}
+            </div>
+          )}
+          {view === 'symbols' && selectedFile && (
+            <div className="atlas-symbol-layout">
+              <div className="atlas-symbol-header">
+                <div><FileCode2 size={17} /><strong>{selectedFile.name}</strong><span>{selectedFile.path}</span></div>
+                <dl>
+                  <div><dt>Symbols</dt><dd>{selectedFile.symbols.filter((symbol) => symbolMatchesFilter(symbol, codeFilter)).length}</dd></div>
+                  <div><dt>Complexity</dt><dd>{filteredComplexity(selectedFile, codeFilter)}</dd></div>
+                  <div><dt>Lines</dt><dd>{filteredLines(selectedFile, codeFilter)}</dd></div>
+                </dl>
+              </div>
+              <SymbolMap
+                file={selectedFile}
+                codeFilter={codeFilter}
+                onOpen={(symbol: AtlasSymbol) => onNavigateSource({
+                  path: selectedFile.path,
+                  line: symbol.line,
+                  column: symbol.column,
+                  symbol: symbol.name,
+                  selection: 'symbol',
+                })}
+              />
+            </div>
+          )}
+          {view === 'source' && selectedFile && (
+            <SourceView
+              node={selectedFile}
+              nodes={snapshot.nodes}
+              analyzers={snapshot.analyzers}
+              codeFilter={codeFilter}
+              loaders={sourceLoaders}
+              targetLine={sourceTarget?.path === selectedFile.path ? sourceTarget.line : undefined}
+              targetColumn={sourceTarget?.path === selectedFile.path ? sourceTarget.column : undefined}
+              targetSymbol={sourceTarget?.path === selectedFile.path ? sourceTarget.symbol : undefined}
+              targetSelection={sourceTarget?.path === selectedFile.path ? sourceTarget.selection : undefined}
+              onNavigateFile={onNavigateSource}
+              annotations={annotations.filter((annotation) => annotation.filePath === selectedFile.path)}
+              annotationControlsEnabled={capabilities.annotations}
+              aiAvailable={capabilities.askAI}
+              onAddAnnotation={onAddAnnotation}
+              onUpdateAnnotation={onUpdateAnnotation}
+              onDeleteAnnotation={onDeleteAnnotation}
+              onAskAI={onAskAI}
+            />
+          )}
+          {(view === 'symbols' || view === 'source') && !selectedFile && (
+            <div className="atlas-empty"><FileCode2 size={28} /><strong>No source file selected</strong></div>
+          )}
+        </div>
+      </section>
+    </div>
+  );
+}
+
 export default function AtlasApp() {
   const { indexStatus, snapshot, error, reindex } = useAtlasData();
   const [view, setView] = useState<AtlasView>('overview');
@@ -385,7 +698,7 @@ export default function AtlasApp() {
   const [query, setQuery] = useState('');
   const [sidebarOpen, setSidebarOpen] = useState(() => !window.matchMedia('(max-width: 620px)').matches);
   const [dark, setDark] = useState(() => !window.matchMedia('(prefers-color-scheme: light)').matches);
-  const [sourceHistory, setSourceHistory] = useState<SourceNavigation[]>([]);
+  const [sourceHistory, setSourceHistory] = useState<AtlasWorkspaceSourceTarget[]>([]);
   const [sourceHistoryIndex, setSourceHistoryIndex] = useState(-1);
   const [annotations, setAnnotations] = useState<AtlasAnnotation[]>([]);
   const [aiOpen, setAiOpen] = useState(false);
@@ -407,15 +720,6 @@ export default function AtlasApp() {
   const focusedRoot = (focusedRootId && byId.get(focusedRootId)) || root;
   const currentSourceTarget = sourceHistory[sourceHistoryIndex];
   const selectedFile = selectedNode?.kind === 'file' ? selectedNode : undefined;
-  const relationshipSelection = selectedNode?.kind === 'root' ? null : selectedNode;
-  const filteredFileCount = nodes.filter(
-    (node) => node.kind === 'file' && nodeMatchesFilter(node, codeFilter),
-  ).length;
-  const filteredLanguageCount = new Set(
-    nodes
-      .filter((node) => node.kind === 'file' && node.language && nodeMatchesFilter(node, codeFilter))
-      .map((node) => node.language),
-  ).size;
   const annotationSummary = useMemo(
     () => formatAtlasAnnotationSummary(annotations),
     [annotations],
@@ -466,7 +770,7 @@ export default function AtlasApp() {
     setSelectedId((current) => current && byId.has(current) ? current : root.id);
   }, [root, byId]);
 
-  const openSource = useCallback((target: SourceNavigation) => {
+  const openSource = useCallback((target: AtlasWorkspaceSourceTarget) => {
     const node = nodes.find((entry) => entry.path === target.path);
     if (!node || node.kind !== 'file') return;
     setSelectedId(node.id);
@@ -496,11 +800,6 @@ export default function AtlasApp() {
     setFocusedRootId(node.id);
     setView('overview');
   }, []);
-
-  const relationships = useMemo(
-    () => relationshipMap(nodes, snapshot?.dependencies ?? [], relationshipSelection),
-    [nodes, snapshot?.dependencies, relationshipSelection],
-  );
 
   const addAnnotation = useCallback((draft: AtlasAnnotationDraft) => {
     const timestamp = new Date().toISOString();
@@ -700,191 +999,39 @@ export default function AtlasApp() {
         </div>
       </header>
 
-      <div className={`atlas-shell${sidebarOpen ? '' : ' is-sidebar-closed'}`}>
-        <aside className="atlas-sidebar">
-          <div className="atlas-sidebar-header">
-            <span>Repository</span>
-            <span>{filteredFileCount} files</span>
-          </div>
-          <DirectoryTree
-            nodes={nodes}
-            codeFilter={codeFilter}
-            selectedId={selectedId}
-            focusedRootId={focusedRoot.id}
-            onSelect={navigateNode}
-            onFocus={navigateNode}
-          />
-          <div className="atlas-sidebar-summary">
-            <span>{formatNumber(filteredLines(root, codeFilter))} lines</span>
-            <span>{formatBytes(filteredBytes(root, codeFilter))}</span>
-            <span>{filteredLanguageCount} languages</span>
-          </div>
-        </aside>
-
-        <section className="atlas-workspace">
-          <div className="atlas-toolbar">
-            <button
-              type="button"
-              className="atlas-icon-button"
-              onClick={() => setSidebarOpen((value) => !value)}
-              title={sidebarOpen ? 'Hide repository tree' : 'Show repository tree'}
-            >{sidebarOpen ? <PanelLeftClose size={15} /> : <PanelLeftOpen size={15} />}</button>
-            <CodeFilterControl value={codeFilter} onChange={setCodeFilter} />
-            {view === 'overview' && (
-              <button
-                type="button"
-                className={`atlas-toolbar-toggle${relationshipsOpen ? ' is-active' : ''}`}
-                aria-pressed={relationshipsOpen}
-                onClick={() => setRelationshipsOpen((value) => !value)}
-              >
-                <GitBranch size={14} aria-hidden />
-                <span>Relationships</span>
-              </button>
-            )}
-            {view === 'source' ? (
-              <>
-                <button
-                  type="button"
-                  className="atlas-icon-button"
-                  disabled={sourceHistoryIndex <= 0}
-                  onClick={() => navigateSourceHistory(sourceHistoryIndex - 1)}
-                  title="Back"
-                ><ArrowLeft size={15} /></button>
-                <button
-                  type="button"
-                  className="atlas-icon-button"
-                  disabled={sourceHistoryIndex >= sourceHistory.length - 1}
-                  onClick={() => navigateSourceHistory(sourceHistoryIndex + 1)}
-                  title="Forward"
-                ><ArrowRight size={15} /></button>
-              </>
-            ) : (
-              <Breadcrumbs node={focusedRoot} byId={byId} onFocus={navigateNode} />
-            )}
-            {view !== 'source' && selectedNode && selectedNode.id !== focusedRoot.id && (
-              <div className="atlas-selection-summary" role="status" aria-live="polite" title={selectedNode.path}>
-                {selectedNode.kind === 'file' ? <FileCode2 size={13} aria-hidden /> : <Columns3 size={13} aria-hidden />}
-                <span>Selected</span>
-                <strong>{selectedNode.path}</strong>
-                <small>{selectedNode.kind} · {formatNumber(filteredLines(selectedNode, codeFilter))} lines</small>
-              </div>
-            )}
-            <div className="atlas-toolbar-spacer" />
-            {view === 'overview' && (
-              <>
-                <label className="atlas-search">
-                  <Search size={14} />
-                  <input value={query} onChange={(event) => setQuery(event.target.value)} placeholder="Find a file" aria-label="Find a file" />
-                  {query && <button type="button" onClick={() => setQuery('')} title="Clear search"><X size={13} /></button>}
-                </label>
-                <SegmentedSelect
-                  label="Size"
-                  value={sizeMetric}
-                  onChange={setSizeMetric}
-                  options={[
-                    { value: 'lines', label: 'Lines' },
-                    { value: 'bytes', label: 'Bytes' },
-                    { value: 'complexity', label: 'Complexity' },
-                  ]}
-                />
-                <SegmentedSelect
-                  label="Color"
-                  value={colorMetric}
-                  onChange={setColorMetric}
-                  options={[
-                    { value: 'language', label: 'Language' },
-                    { value: 'complexity', label: 'Complexity' },
-                    { value: 'size', label: 'Size' },
-                  ]}
-                />
-              </>
-            )}
-          </div>
-
-          <div className={`atlas-content atlas-content--${view}`}>
-            {view === 'overview' && (
-              <div className={`atlas-overview-layout${relationshipsOpen ? ' is-relationships' : ''}`}>
-                <div className="atlas-overview-map">
-                  <BlockMap
-                    nodes={nodes}
-                    root={focusedRoot}
-                    codeFilter={codeFilter}
-                    sizeMetric={sizeMetric}
-                    colorMetric={colorMetric}
-                    query={query}
-                    selectedId={selectedId}
-                    relationships={relationshipsOpen ? relationships : undefined}
-                    onSelect={relationshipsOpen ? (node) => setSelectedId(node.id) : navigateNode}
-                    onOpen={navigateNode}
-                  />
-                  {relationshipsOpen && (
-                    <div className="atlas-relationship-legend">
-                      <span><i className="legend-selected" />Selected</span>
-                      <span><i className="legend-outgoing" />Uses</span>
-                      <span><i className="legend-incoming" />Used by</span>
-                      <span><i className="legend-both" />Both</span>
-                    </div>
-                  )}
-                </div>
-                {relationshipsOpen && (
-                  <DetailInspector
-                    node={relationshipSelection}
-                    codeFilter={codeFilter}
-                    dependencies={snapshot.dependencies}
-                    byId={byId}
-                    onSelect={(node) => setSelectedId(node.id)}
-                  />
-                )}
-              </div>
-            )}
-            {view === 'symbols' && selectedFile && (
-              <div className="atlas-symbol-layout">
-                <div className="atlas-symbol-header">
-                  <div><FileCode2 size={17} /><strong>{selectedFile.name}</strong><span>{selectedFile.path}</span></div>
-                  <dl>
-                    <div><dt>Symbols</dt><dd>{selectedFile.symbols.filter((symbol) => symbolMatchesFilter(symbol, codeFilter)).length}</dd></div>
-                    <div><dt>Complexity</dt><dd>{filteredComplexity(selectedFile, codeFilter)}</dd></div>
-                    <div><dt>Lines</dt><dd>{filteredLines(selectedFile, codeFilter)}</dd></div>
-                  </dl>
-                </div>
-                <SymbolMap
-                  file={selectedFile}
-                  codeFilter={codeFilter}
-                  onOpen={(symbol: AtlasSymbol) => openSource({
-                    path: selectedFile.path,
-                    line: symbol.line,
-                    column: symbol.column,
-                    symbol: symbol.name,
-                    selection: 'symbol',
-                  })}
-                />
-              </div>
-            )}
-            {view === 'source' && selectedFile && (
-              <SourceView
-                node={selectedFile}
-                nodes={snapshot.nodes}
-                analyzers={snapshot.analyzers}
-                codeFilter={codeFilter}
-                targetLine={currentSourceTarget?.path === selectedFile.path ? currentSourceTarget.line : undefined}
-                targetColumn={currentSourceTarget?.path === selectedFile.path ? currentSourceTarget.column : undefined}
-                targetSymbol={currentSourceTarget?.path === selectedFile.path ? currentSourceTarget.symbol : undefined}
-                targetSelection={currentSourceTarget?.path === selectedFile.path ? currentSourceTarget.selection : undefined}
-                onNavigateFile={openSource}
-                annotations={annotations.filter((annotation) => annotation.filePath === selectedFile.path)}
-                aiAvailable={aiAvailable}
-                onAddAnnotation={addAnnotation}
-                onUpdateAnnotation={updateAnnotation}
-                onDeleteAnnotation={deleteAnnotation}
-                onAskAI={askSelection}
-              />
-            )}
-            {(view === 'symbols' || view === 'source') && !selectedFile && (
-              <div className="atlas-empty"><FileCode2 size={28} /><strong>No source file selected</strong></div>
-            )}
-          </div>
-        </section>
-      </div>
+      <AtlasWorkspace
+        snapshot={snapshot}
+        view={view}
+        selectedId={selectedId}
+        focusedRootId={focusedRootId}
+        sizeMetric={sizeMetric}
+        colorMetric={colorMetric}
+        codeFilter={codeFilter}
+        relationshipsOpen={relationshipsOpen}
+        query={query}
+        sidebarOpen={sidebarOpen}
+        sourceTarget={currentSourceTarget}
+        canNavigateSourceBack={sourceHistoryIndex > 0}
+        canNavigateSourceForward={sourceHistoryIndex < sourceHistory.length - 1}
+        annotations={annotations}
+        capabilities={{ annotations: true, askAI: aiAvailable }}
+        sourceLoaders={DEFAULT_SOURCE_LOADERS}
+        onSelectedIdChange={setSelectedId}
+        onNavigateNode={navigateNode}
+        onNavigateSource={openSource}
+        onNavigateSourceBack={() => navigateSourceHistory(sourceHistoryIndex - 1)}
+        onNavigateSourceForward={() => navigateSourceHistory(sourceHistoryIndex + 1)}
+        onSizeMetricChange={setSizeMetric}
+        onColorMetricChange={setColorMetric}
+        onCodeFilterChange={setCodeFilter}
+        onRelationshipsOpenChange={setRelationshipsOpen}
+        onQueryChange={setQuery}
+        onSidebarOpenChange={setSidebarOpen}
+        onAddAnnotation={addAnnotation}
+        onUpdateAnnotation={updateAnnotation}
+        onDeleteAnnotation={deleteAnnotation}
+        onAskAI={askSelection}
+      />
       {aiOpen && (
         <aside className="atlas-ai-drawer" aria-label="Ask AI">
           <div className="atlas-ai-drawer-header">

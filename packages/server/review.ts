@@ -118,6 +118,12 @@ import {
   BUILTIN_DEFAULT_PROFILE,
   type ReviewProfilesResponse,
 } from "@plannotator/shared/review-profiles";
+import {
+  AtlasReviewRuntimeManager,
+  AtlasReviewUnavailableError,
+  atlasReviewUnavailableStatus,
+  type AtlasReviewRootResolution,
+} from "@plannotator/shared/atlas-review-runtime";
 
 // Review ingestion completion semantics (REVIEW_OUTPUT_FAILED,
 // markJobReviewFailed) now live in @plannotator/shared/agent-jobs.
@@ -341,6 +347,74 @@ export async function startReviewServer(
     }
     return agentCwdIfExists();
   };
+  const resolveAtlasReviewRoot = (): AtlasReviewRootResolution => {
+    if (workspace) {
+      if (workspace.repos.length !== 1) {
+        return {
+          kind: "unavailable",
+          code: "multi-root-workspace",
+          message: "Atlas is unavailable for reviews spanning multiple repository roots.",
+          retryable: false,
+        };
+      }
+      const rootPath = workspace.repos[0]?.cwd;
+      return rootPath
+        ? { kind: "ready", rootPath, bindingKey: `workspace:${workspace.repos[0]!.id}:${rootPath}` }
+        : {
+            kind: "unavailable",
+            code: "no-local-checkout",
+            message: "This workspace review has no local repository checkout.",
+            retryable: false,
+          };
+    }
+    if (isPRMode) {
+      if (options.worktreePool && prMetadata) {
+        const resolution = resolvePoolCwd(options.worktreePool, prMetadata.url);
+        if (resolution.kind === "ready") {
+          return {
+            kind: "ready",
+            rootPath: resolution.path,
+            bindingKey: `pr:${prMetadata.url}:${resolution.path}`,
+          };
+        }
+        if (resolution.kind === "pending") {
+          return {
+            kind: "unavailable",
+            code: "checkout-pending",
+            message: "The pull request checkout is still being prepared.",
+            retryable: true,
+          };
+        }
+        return {
+          kind: "unavailable",
+          code: "no-local-checkout",
+          message: "The active pull request does not have a local checkout.",
+          retryable: false,
+        };
+      }
+      const rootPath = agentCwdIfExists();
+      return rootPath && prMetadata
+        ? { kind: "ready", rootPath, bindingKey: `pr:${prMetadata.url}:${rootPath}` }
+        : {
+            kind: "unavailable",
+            code: "no-local-checkout",
+            message: "This pull request does not have a local checkout.",
+            retryable: false,
+          };
+    }
+    const rootPath =
+      resolveVcsCwd(currentDiffType as DiffType, gitContext?.cwd)
+      ?? (options.agentCwd && existsSync(options.agentCwd) ? options.agentCwd : undefined);
+    return rootPath
+      ? { kind: "ready", rootPath, bindingKey: `local:${rootPath}` }
+      : {
+          kind: "unavailable",
+          code: "no-local-checkout",
+          message: "This review does not have a local repository checkout.",
+          retryable: false,
+        };
+  };
+  const atlasRuntime = new AtlasReviewRuntimeManager(resolveAtlasReviewRoot);
   // Failure memo: a persistently-failing checkout (network down, ref denied)
   // must not turn every code-nav hover / agent launch into a multi-second
   // re-fetch against origin. Failed URLs are skipped for a cooldown window.
@@ -1401,6 +1475,98 @@ export async function startReviewServer(
     resolveDecision = resolve;
   });
 
+  const handleAtlasRequest = async (
+    req: Request,
+    url: URL,
+  ): Promise<Response | null> => {
+    if (!url.pathname.startsWith("/api/atlas")) return null;
+    const method = req.method.toUpperCase();
+    try {
+      if (method === "GET" && url.pathname === "/api/atlas/status") {
+        return Response.json(await atlasRuntime.status());
+      }
+      if (method === "GET" && url.pathname === "/api/atlas") {
+        const result = await atlasRuntime.snapshot();
+        if (result.snapshot) return Response.json(result.snapshot);
+        return Response.json(result.status, {
+          status: result.status.status === "error" ? 500 : 202,
+        });
+      }
+      if (method === "GET" && url.pathname === "/api/atlas/source") {
+        const filePath = url.searchParams.get("path");
+        if (!filePath) return Response.json({ error: "Missing path parameter" }, { status: 400 });
+        try {
+          return Response.json(await atlasRuntime.source(filePath));
+        } catch (error) {
+          if (error instanceof AtlasReviewUnavailableError) throw error;
+          return Response.json({
+            error: error instanceof Error ? error.message : "Source file not found",
+          }, { status: 404 });
+        }
+      }
+      if (method === "GET" && url.pathname === "/api/atlas/references") {
+        const symbol = url.searchParams.get("symbol")?.trim();
+        if (!symbol) return Response.json({ error: "Missing symbol parameter" }, { status: 400 });
+        if (!/^[\p{L}_$][\p{L}\p{N}_$]*$/u.test(symbol)) {
+          return Response.json({ error: "Invalid symbol parameter" }, { status: 400 });
+        }
+        const filePath = url.searchParams.get("path");
+        if (!filePath) return Response.json({ error: "Missing path parameter" }, { status: 400 });
+        const line = Number(url.searchParams.get("line"));
+        const column = Number(url.searchParams.get("column"));
+        if (!Number.isInteger(line) || line < 1 || !Number.isInteger(column) || column < 1) {
+          return Response.json(
+            { error: "Line and column must be positive integers" },
+            { status: 400 },
+          );
+        }
+        const result = await atlasRuntime.references({
+          symbol,
+          filePath,
+          line,
+          column,
+          signal: req.signal,
+        });
+        return Response.json(result, {
+          status: "phase" in result ? (result.status === "error" ? 500 : 202) : 200,
+        });
+      }
+      if (method === "GET" && url.pathname === "/api/atlas/calls") {
+        const filePath = url.searchParams.get("path");
+        if (!filePath) return Response.json({ error: "Missing path parameter" }, { status: 400 });
+        const line = Number(url.searchParams.get("line"));
+        const column = Number(url.searchParams.get("column"));
+        if (!Number.isInteger(line) || line < 1 || !Number.isInteger(column) || column < 1) {
+          return Response.json(
+            { error: "Line and column must be positive integers" },
+            { status: 400 },
+          );
+        }
+        const result = await atlasRuntime.calls({
+          filePath,
+          line,
+          column,
+          signal: req.signal,
+        });
+        return Response.json(result, {
+          status: "phase" in result ? (result.status === "error" ? 500 : 202) : 200,
+        });
+      }
+      if (method === "POST" && url.pathname === "/api/atlas/index") {
+        return Response.json(await atlasRuntime.reindex(), { status: 202 });
+      }
+      return null;
+    } catch (error) {
+      if (error instanceof AtlasReviewUnavailableError) {
+        if (error.resolution.code === "checkout-pending") {
+          return Response.json(await atlasRuntime.status(), { status: 202 });
+        }
+        return Response.json(atlasReviewUnavailableStatus(error), { status: 409 });
+      }
+      throw error;
+    }
+  };
+
   const server = await startBunServerOnAvailablePort((port) =>
     Bun.serve({
         hostname: getServerHostname(),
@@ -1412,6 +1578,8 @@ export async function startReviewServer(
 
         async fetch(req, server) {
           const url = new URL(req.url);
+          const atlasResponse = await handleAtlasRequest(req, url);
+          if (atlasResponse) return atlasResponse;
 
           // API: Get tour result
           if (url.pathname.match(/^\/api\/tour\/[^/]+$/) && req.method === "GET") {
@@ -2910,6 +3078,7 @@ export async function startReviewServer(
       process.removeListener("exit", exitHandler);
       agentJobs.killAll();
       aiRuntime?.dispose();
+      void atlasRuntime.dispose();
       server.stop();
       // Invoke cleanup callback (e.g., remove temp worktree)
       if (options.onCleanup) {

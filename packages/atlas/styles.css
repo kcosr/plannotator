@@ -249,11 +249,45 @@ button { color: inherit; }
 .atlas-block--incoming:not(.is-selected) { opacity: 1; box-shadow: inset 0 0 0 3px #22c55e; }
 .atlas-block--outgoing:not(.is-selected) { opacity: 1; box-shadow: inset 0 0 0 3px #3b82f6; }
 .atlas-block--both:not(.is-selected) { opacity: 1; box-shadow: inset 3px 0 #22c55e, inset -3px 0 #3b82f6; }
+.atlas-block.has-change-overlay {
+  background: color-mix(
+    in oklab,
+    #ef4444 var(--change-intensity),
+    color-mix(in oklab, var(--block-color) 48%, var(--background))
+  );
+}
+.light .atlas-block.has-change-overlay {
+  background: color-mix(
+    in oklab,
+    #dc2626 var(--change-intensity),
+    color-mix(in oklab, var(--block-color) 38%, var(--background))
+  );
+}
+.atlas-block.has-change-overlay.is-container {
+  background: color-mix(
+    in oklab,
+    #ef4444 var(--change-intensity),
+    color-mix(in oklab, var(--block-color) 26%, var(--background))
+  );
+}
+.atlas-block.is-direct-change { border-color: color-mix(in oklab, #fca5a5 82%, var(--border)); }
+.atlas-block--impact-direct { outline: 3px solid #f8fafc; outline-offset: -4px; }
+.atlas-block--impact-impacted { outline: 2px solid #c084fc; outline-offset: -3px; }
+.atlas-block--impact-caller { outline: 2px solid #22c55e; outline-offset: -3px; }
+.atlas-block--impact-callee { outline: 2px solid #38bdf8; outline-offset: -3px; }
+.atlas-block--impact-reference { outline: 2px solid #facc15; outline-offset: -3px; }
 .atlas-block__title { display: flex; align-items: center; gap: 5px; min-width: 0; font-weight: 650; font-size: 11px; line-height: 15px; }
 .atlas-block__title svg { flex: none; }
 .atlas-block__title span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .atlas-block__meta { display: flex; justify-content: space-between; gap: 5px; margin-top: 3px; opacity: .74; font: 9px/1.2 var(--font-mono); }
 .atlas-block__meta span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.atlas-block__change {
+  position: absolute; right: 6px; bottom: 5px; max-width: calc(100% - 12px);
+  overflow: hidden; text-overflow: ellipsis; white-space: nowrap;
+  padding: 1px 4px; border-radius: 3px;
+  color: white; background: rgb(0 0 0 / .42); font: 9px/1.25 var(--font-mono);
+}
+.light .atlas-block__change { color: #111827; background: rgb(255 255 255 / .68); }
 
 .atlas-overview-layout, .atlas-overview-map { width: 100%; height: 100%; min-width: 0; min-height: 0; }
 .atlas-overview-map { position: relative; }

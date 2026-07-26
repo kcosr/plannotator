@@ -19,6 +19,560 @@
    Code Review Specific Styles
    ===================================================== */
 
+.review-surface-switcher {
+  height: 27px;
+  flex: none;
+  display: grid;
+  grid-template-columns: repeat(3, auto);
+  gap: 2px;
+  padding: 2px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--background);
+}
+
+.review-surface-switcher button {
+  min-width: 45px;
+  padding: 0 7px;
+  border: 0;
+  border-radius: 3px;
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: pointer;
+  font-size: 11px;
+  line-height: 1;
+}
+
+.review-surface-switcher button:hover {
+  color: var(--foreground);
+  background: var(--muted);
+}
+
+.review-surface-switcher button.is-active {
+  color: var(--foreground);
+  background: color-mix(in oklab, var(--primary) 16%, var(--muted));
+  box-shadow: inset 0 0 0 1px color-mix(in oklab, var(--primary) 42%, var(--border));
+}
+
+.review-atlas-host {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: 34px minmax(0, 1fr);
+  overflow: hidden;
+  background: var(--background);
+  color: var(--foreground);
+}
+
+.review-atlas-host__header {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 0 8px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in oklab, var(--muted) 24%, var(--background));
+}
+
+.review-atlas-host__views {
+  height: 100%;
+  display: flex;
+  align-items: stretch;
+  gap: 2px;
+}
+
+.review-atlas-host__views button,
+.review-atlas-host__views > span {
+  position: relative;
+  min-width: 76px;
+  padding: 0 9px;
+  border: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  background: transparent;
+  color: var(--muted-foreground);
+  font-size: 10px;
+}
+
+.review-atlas-host__views button {
+  cursor: pointer;
+}
+
+.review-atlas-host__views button:hover:not(:disabled) {
+  color: var(--foreground);
+  background: color-mix(in oklab, var(--foreground) 4%, transparent);
+}
+
+.review-atlas-host__views button:disabled {
+  opacity: .35;
+  cursor: default;
+}
+
+.review-atlas-host__views .is-active {
+  color: var(--foreground);
+}
+
+.review-atlas-host__views .is-active::after {
+  content: "";
+  position: absolute;
+  height: 2px;
+  left: 8px;
+  right: 8px;
+  bottom: 0;
+  background: var(--primary);
+}
+
+.review-atlas-host__summary {
+  min-width: 0;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: var(--muted-foreground);
+  font: 10px var(--font-mono);
+}
+
+.review-atlas-host__summary strong {
+  color: var(--foreground);
+  font-family: var(--font-sans);
+}
+
+.review-atlas-host__summary .is-addition { color: #22c55e; }
+.review-atlas-host__summary .is-deletion { color: #ef4444; }
+
+.review-atlas-host__index {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--muted-foreground);
+  font-size: 10px;
+  white-space: nowrap;
+}
+
+.review-atlas-host__index svg { color: #22c55e; }
+.review-atlas-host__index.is-working svg { color: var(--primary); }
+
+.review-atlas-host__workspace {
+  min-width: 0;
+  min-height: 0;
+  width: 100%;
+  height: 100%;
+}
+
+.review-atlas-host__workspace.is-scope {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) 300px;
+}
+
+.review-atlas-host__canvas {
+  position: relative;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
+}
+
+.review-atlas-host__canvas > .atlas-shell {
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+}
+
+.review-atlas-scope-sidebar {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: minmax(180px, 44%) minmax(0, 56%);
+  border-left: 1px solid var(--border);
+  background: var(--sidebar);
+}
+
+.review-atlas-hotspots,
+.review-atlas-impact {
+  min-width: 0;
+  min-height: 0;
+  display: grid;
+  grid-template-rows: 33px minmax(0, 1fr);
+}
+
+.review-atlas-hotspots {
+  border-bottom: 1px solid var(--border);
+}
+
+.review-atlas-hotspots > header,
+.review-atlas-impact > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 9px 0 11px;
+  border-bottom: 1px solid var(--border);
+  color: var(--muted-foreground);
+  font-size: 10px;
+  font-weight: 650;
+  text-transform: uppercase;
+}
+
+.review-atlas-hotspots > header strong,
+.review-atlas-impact > header strong {
+  min-width: 18px;
+  height: 17px;
+  padding: 0 4px;
+  display: grid;
+  place-items: center;
+  border-radius: 3px;
+  background: var(--muted);
+  color: var(--foreground);
+  font: 9px var(--font-mono);
+}
+
+.review-atlas-hotspot-list,
+.review-atlas-impact-body {
+  min-width: 0;
+  min-height: 0;
+  overflow: auto;
+}
+
+.review-atlas-hotspot-list {
+  padding: 4px;
+}
+
+.review-atlas-hotspot-list > button {
+  width: 100%;
+  min-height: 52px;
+  padding: 5px 6px;
+  display: grid;
+  grid-template-columns: 20px minmax(0, 1fr) auto;
+  align-items: start;
+  gap: 5px;
+  border: 0;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted-foreground);
+  text-align: left;
+  cursor: pointer;
+}
+
+.review-atlas-hotspot-list > button:hover {
+  background: color-mix(in oklab, var(--foreground) 5%, transparent);
+  color: var(--foreground);
+}
+
+.review-atlas-hotspot-list > button.is-selected {
+  background: color-mix(in oklab, var(--primary) 14%, var(--background));
+  box-shadow: inset 2px 0 var(--primary);
+  color: var(--foreground);
+}
+
+.review-atlas-hotspot-rank {
+  padding-top: 1px;
+  color: var(--muted-foreground);
+  font: 9px/16px var(--font-mono);
+  text-align: center;
+}
+
+.review-atlas-hotspot-main {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 1px;
+}
+
+.review-atlas-hotspot-main strong,
+.review-atlas-hotspot-main small,
+.review-atlas-hotspot-main > span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.review-atlas-hotspot-main strong {
+  color: var(--foreground);
+  font-size: 11px;
+  line-height: 15px;
+}
+
+.review-atlas-hotspot-main small {
+  font: 9px/14px var(--font-mono);
+}
+
+.review-atlas-hotspot-main > span {
+  font-size: 9px;
+  line-height: 13px;
+}
+
+.review-atlas-hotspot-flags {
+  display: flex;
+  align-items: center;
+  gap: 3px;
+  padding-top: 2px;
+  color: var(--primary);
+}
+
+.review-atlas-hotspot-empty,
+.review-atlas-impact-empty {
+  min-height: 100%;
+  padding: 18px;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  color: var(--muted-foreground);
+  text-align: center;
+  font-size: 10px;
+  line-height: 1.45;
+}
+
+.review-atlas-impact-empty.is-error { color: var(--destructive); }
+.review-atlas-impact-empty button {
+  height: 26px;
+  padding: 0 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--border);
+  border-radius: 4px;
+  background: var(--background);
+  color: var(--foreground);
+  cursor: pointer;
+  font-size: 9px;
+}
+
+.review-atlas-impact-selection {
+  min-width: 0;
+  height: 43px;
+  padding: 5px 7px 5px 10px;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  border-bottom: 1px solid var(--border);
+}
+
+.review-atlas-impact-selection > div {
+  min-width: 0;
+  display: flex;
+  flex: 1;
+  flex-direction: column;
+}
+
+.review-atlas-impact-selection strong,
+.review-atlas-impact-selection span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.review-atlas-impact-selection strong { color: var(--foreground); font-size: 11px; }
+.review-atlas-impact-selection span { color: var(--muted-foreground); font: 9px var(--font-mono); }
+.review-atlas-impact-selection button {
+  width: 27px;
+  height: 27px;
+  flex: none;
+  display: grid;
+  place-items: center;
+  border: 1px solid transparent;
+  border-radius: 4px;
+  background: transparent;
+  color: var(--muted-foreground);
+  cursor: pointer;
+}
+.review-atlas-impact-selection button:hover {
+  border-color: var(--border);
+  background: var(--muted);
+  color: var(--foreground);
+}
+
+.review-atlas-impact-warning {
+  padding: 6px 8px;
+  display: flex;
+  align-items: flex-start;
+  gap: 5px;
+  border-bottom: 1px solid var(--border);
+  background: color-mix(in oklab, #f59e0b 8%, transparent);
+  color: color-mix(in oklab, #f59e0b 70%, var(--foreground));
+  font-size: 9px;
+  line-height: 1.4;
+}
+.review-atlas-impact-warning svg { flex: none; margin-top: 1px; }
+
+.review-atlas-impact-group {
+  border-bottom: 1px solid var(--border);
+}
+
+.review-atlas-impact-group h4 {
+  height: 27px;
+  margin: 0;
+  padding: 0 9px;
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  color: var(--muted-foreground);
+  font-size: 9px;
+  text-transform: uppercase;
+}
+
+.review-atlas-impact-group h4 span { font: 9px var(--font-mono); }
+.review-atlas-impact-group p {
+  margin: 0;
+  padding: 4px 9px 9px;
+  color: var(--muted-foreground);
+  font-size: 9px;
+}
+
+.review-atlas-impact-group button {
+  width: 100%;
+  min-width: 0;
+  padding: 5px 9px 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  border: 0;
+  border-left: 2px solid transparent;
+  background: transparent;
+  color: var(--muted-foreground);
+  text-align: left;
+  cursor: pointer;
+}
+
+.review-atlas-impact-group button:hover {
+  background: color-mix(in oklab, var(--foreground) 5%, transparent);
+  color: var(--foreground);
+}
+
+.review-atlas-impact-group:nth-of-type(1) button { border-left-color: #22c55e; }
+.review-atlas-impact-group:nth-of-type(2) button { border-left-color: #38bdf8; }
+.review-atlas-impact-group:nth-of-type(3) button { border-left-color: #facc15; }
+
+.review-atlas-impact-result__title {
+  min-width: 0;
+  width: 100%;
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 7px;
+}
+
+.review-atlas-impact-result__title strong {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--foreground);
+  font-size: 10px;
+}
+
+.review-atlas-impact-result__title small {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  font: 8px var(--font-mono);
+}
+
+.review-atlas-impact-group code {
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--muted-foreground);
+  font: 9px var(--font-mono);
+}
+
+.review-atlas-impact-legend {
+  position: absolute;
+  z-index: 25;
+  top: 48px;
+  right: 10px;
+  padding: 5px 7px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: color-mix(in oklab, var(--background) 91%, transparent);
+  color: var(--muted-foreground);
+  backdrop-filter: blur(6px);
+  font-size: 9px;
+}
+
+.review-atlas-impact-legend span { display: flex; align-items: center; gap: 4px; }
+.review-atlas-impact-legend i {
+  width: 8px;
+  height: 8px;
+  border: 2px solid currentColor;
+}
+.review-atlas-impact-legend .is-direct { color: #f8fafc; }
+.review-atlas-impact-legend .is-caller { color: #22c55e; }
+.review-atlas-impact-legend .is-callee { color: #38bdf8; }
+.review-atlas-impact-legend .is-reference { color: #facc15; }
+
+.review-atlas-state {
+  flex: 1;
+  min-width: 0;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 8px;
+  padding: 24px;
+  color: var(--muted-foreground);
+  text-align: center;
+}
+
+.review-atlas-state__mark {
+  width: 38px;
+  height: 38px;
+  display: grid;
+  place-items: center;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  color: var(--primary);
+  background: var(--muted);
+}
+
+.review-atlas-state__mark.is-error { color: var(--destructive); }
+.review-atlas-state strong { color: var(--foreground); font-size: 13px; }
+.review-atlas-state span { max-width: 420px; font-size: 11px; line-height: 1.5; }
+.review-atlas-state button {
+  height: 28px;
+  padding: 0 9px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  border: 1px solid var(--border);
+  border-radius: 5px;
+  background: var(--background);
+  color: var(--foreground);
+  cursor: pointer;
+  font-size: 10px;
+}
+
+.review-atlas-spin { animation: review-atlas-spin 800ms linear infinite; }
+@keyframes review-atlas-spin { to { transform: rotate(360deg); } }
+
+@media (max-width: 720px) {
+  .review-surface-switcher button { min-width: 42px; padding: 0 5px; }
+  .review-atlas-host__summary { display: none; }
+  .review-atlas-host__views button,
+  .review-atlas-host__views > span { min-width: 62px; padding: 0 6px; }
+  .review-atlas-host__workspace.is-scope {
+    grid-template-columns: minmax(0, 1fr);
+    grid-template-rows: minmax(260px, 58%) minmax(0, 42%);
+  }
+  .review-atlas-scope-sidebar {
+    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
+    grid-template-rows: minmax(0, 1fr);
+    border-top: 1px solid var(--border);
+    border-left: 0;
+  }
+  .review-atlas-hotspots { border-right: 1px solid var(--border); border-bottom: 0; }
+  .review-atlas-impact-legend { display: none; }
+}
+
 /* Shared panel header height — keeps file header, sidebar headers, and
    search bar vertically aligned across all three columns. */
 :root {

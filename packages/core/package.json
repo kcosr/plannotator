@@ -18,6 +18,7 @@
     "./goal-setup": "./goal-setup.ts",
     "./open-in-apps": "./open-in-apps.ts",
     "./project": "./project.ts",
+    "./review-scope": "./review-scope.ts",
     "./source-save": "./source-save.ts",
     "./config-types": "./config-types.ts",
     "./storage-types": "./storage-types.ts",

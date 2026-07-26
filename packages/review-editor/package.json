@@ -5,6 +5,7 @@
   "exports": {
     ".": "./App.tsx",
     "./styles": "./index.css",
+    "./atlas-surface": "./components/ReviewAtlasSurface.tsx",
     "./shortcuts": "./shortcuts.ts",
     "./worker-pool": "./workerPool.tsx"
   },
@@ -13,6 +14,8 @@
     "@fontsource-variable/geist-mono": "5.2.7",
     "@fontsource-variable/inter": "^5.2.8",
     "@pierre/diffs": "1.2.8",
+    "@plannotator/atlas": "workspace:*",
+    "@plannotator/core": "workspace:*",
     "@plannotator/shared": "workspace:*",
     "@plannotator/ui": "workspace:*",
     "highlight.js": "^11.11.1",
