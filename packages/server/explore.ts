@@ -116,7 +116,16 @@ export async function startExploreServer(
             }),
             ...(capability.reason && { reason: capability.reason }),
           }));
-        return buildAtlasSnapshot(rootPath, { semanticProviders });
+        const nextSnapshot = await buildAtlasSnapshot(rootPath, { semanticProviders });
+        const languages = Object.values(capabilities)
+          .filter(
+            (capability) =>
+              capability.available &&
+              Boolean(nextSnapshot.summary.languages[capability.language]),
+          )
+          .map((capability) => capability.language);
+        await semanticSession.warmLanguages(rootPath, languages);
+        return nextSnapshot;
       })
       .then((nextSnapshot) => {
         if (stopped) return;

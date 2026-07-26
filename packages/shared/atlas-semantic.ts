@@ -12,6 +12,7 @@ import { fileURLToPath, pathToFileURL } from "node:url";
 import {
 	CancellationTokenSource,
 	createMessageConnection,
+	ResponseError,
 	StreamMessageReader,
 	StreamMessageWriter,
 	type MessageConnection,
@@ -169,6 +170,30 @@ const DEFAULT_INITIALIZE_TIMEOUT_MS = 12_000;
 const DEFAULT_REQUEST_TIMEOUT_MS = 8_000;
 const DEFAULT_SHUTDOWN_TIMEOUT_MS = 1_500;
 const MAX_DIAGNOSTIC_BYTES = 16 * 1024;
+const LSP_CONTENT_MODIFIED = -32801;
+const CONTENT_MODIFIED_RETRY_DELAYS_MS = [75, 150, 300];
+
+function isContentModifiedError(error: unknown): boolean {
+	return error instanceof ResponseError && error.code === LSP_CONTENT_MODIFIED;
+}
+
+async function retryContentModified<T>(request: () => Promise<T>): Promise<T> {
+	for (let attempt = 0; ; attempt += 1) {
+		try {
+			return await request();
+		} catch (error) {
+			if (
+				!isContentModifiedError(error) ||
+				attempt >= CONTENT_MODIFIED_RETRY_DELAYS_MS.length
+			) {
+				throw error;
+			}
+			await new Promise((resolvePromise) =>
+				setTimeout(resolvePromise, CONTENT_MODIFIED_RETRY_DELAYS_MS[attempt]),
+			);
+		}
+	}
+}
 
 const SERVER_DEFINITIONS: ServerDefinition[] = [
 	{
@@ -907,6 +932,18 @@ export class AtlasSemanticSession {
 		return pending;
 	}
 
+	async warmLanguages(
+		rootPath: string,
+		languages: AtlasSemanticLanguage[],
+	): Promise<void> {
+		const normalizedRoot = realpathSync(resolve(rootPath));
+		await Promise.allSettled(
+			[...new Set(languages)].map((language) =>
+				this.#clientFor(normalizedRoot, language),
+			),
+		);
+	}
+
 	async findLocations(
 		rootPath: string,
 		filePath: string,
@@ -933,26 +970,33 @@ export class AtlasSemanticSession {
 			try {
 				const position = { line: line - 1, character: column - 1 };
 				const textDocument = { uri };
-				const [definitions, references] = await withTimeout(
-					guardProcess(
-						client,
-						Promise.all([
-							client.connection.sendRequest<
-								LspLocation | LspLocationLink | Array<LspLocation | LspLocationLink> | null
-							>("textDocument/definition", { textDocument, position }),
-							client.connection.sendRequest<LspLocation[] | null>(
-								"textDocument/references",
-								{
-									textDocument,
-									position,
-									context: { includeDeclaration: false },
-								},
-							),
-						]),
-					),
-					`${client.definition.id} location lookup`,
-					this.#options.requestTimeoutMs,
-				);
+				const [definitions, references] = await Promise.all([
+					retryContentModified(() => {
+						const request = client.connection.sendRequest<
+							LspLocation | LspLocationLink | Array<LspLocation | LspLocationLink> | null
+						>("textDocument/definition", { textDocument, position });
+						return withTimeout(
+							guardProcess(client, request),
+							`${client.definition.id} definition lookup`,
+							this.#options.requestTimeoutMs,
+						);
+					}),
+					retryContentModified(() => {
+						const request = client.connection.sendRequest<LspLocation[] | null>(
+							"textDocument/references",
+							{
+								textDocument,
+								position,
+								context: { includeDeclaration: false },
+							},
+						);
+						return withTimeout(
+							guardProcess(client, request),
+							`${client.definition.id} reference lookup`,
+							this.#options.requestTimeoutMs,
+						);
+					}),
+				]);
 				result = {
 					definitions: normalizeLocations(definitions, source.rootPath),
 					references: normalizeLocations(references, source.rootPath),
@@ -970,7 +1014,7 @@ export class AtlasSemanticSession {
 			await queued;
 			return result;
 		} catch (error) {
-			if (this.#clients.delete(client.key)) {
+			if (!isContentModifiedError(error) && this.#clients.delete(client.key)) {
 				await stopClient(client, this.#options.shutdownTimeoutMs);
 			}
 			throw error;
@@ -1016,9 +1060,10 @@ export class AtlasSemanticSession {
 			const cancelRequest = () => cancellation.cancel();
 			signal?.addEventListener("abort", cancelRequest, { once: true });
 			try {
-				signal?.throwIfAborted();
-				const position = { line: line - 1, character: column - 1 };
-				const textDocument = { uri };
+				result = await retryContentModified(async () => {
+					signal?.throwIfAborted();
+					const position = { line: line - 1, character: column - 1 };
+					const textDocument = { uri };
 					const prepared = await withTimeout(
 						guardProcess(
 							client,
@@ -1032,42 +1077,42 @@ export class AtlasSemanticSession {
 						this.#options.requestTimeoutMs,
 					);
 					const rawRoot = prepared?.[0];
-				if (!rawRoot) {
-					result = {
-						supported: true,
-						root: null,
-						incoming: [],
-						outgoing: [],
-					};
-						return;
+					if (!rawRoot) {
+						return {
+							supported: true,
+							root: null,
+							incoming: [],
+							outgoing: [],
+						};
 					}
 
 					signal?.throwIfAborted();
 					const [incoming, outgoing] = await withTimeout(
-					guardProcess(
-						client,
-						Promise.all([
-							client.connection.sendRequest<LspCallHierarchyIncomingCall[] | null>(
-								"callHierarchy/incomingCalls",
-								{ item: rawRoot },
-								cancellation.token,
-							),
-							client.connection.sendRequest<LspCallHierarchyOutgoingCall[] | null>(
-								"callHierarchy/outgoingCalls",
-								{ item: rawRoot },
-								cancellation.token,
-							),
-						]),
-					),
-					`${client.definition.id} call hierarchy lookup`,
-					this.#options.requestTimeoutMs,
-				);
-				result = {
-					supported: true,
-					root: callHierarchyItemFromLsp(rawRoot, source.rootPath),
-					incoming: normalizeCallHierarchyCalls(incoming, "incoming", source.rootPath),
-					outgoing: normalizeCallHierarchyCalls(outgoing, "outgoing", source.rootPath),
-				};
+						guardProcess(
+							client,
+							Promise.all([
+								client.connection.sendRequest<LspCallHierarchyIncomingCall[] | null>(
+									"callHierarchy/incomingCalls",
+									{ item: rawRoot },
+									cancellation.token,
+								),
+								client.connection.sendRequest<LspCallHierarchyOutgoingCall[] | null>(
+									"callHierarchy/outgoingCalls",
+									{ item: rawRoot },
+									cancellation.token,
+								),
+							]),
+						),
+						`${client.definition.id} call hierarchy lookup`,
+						this.#options.requestTimeoutMs,
+					);
+					return {
+						supported: true,
+						root: callHierarchyItemFromLsp(rawRoot, source.rootPath),
+						incoming: normalizeCallHierarchyCalls(incoming, "incoming", source.rootPath),
+						outgoing: normalizeCallHierarchyCalls(outgoing, "outgoing", source.rootPath),
+					};
+				});
 			} finally {
 				signal?.removeEventListener("abort", cancelRequest);
 				cancellation.dispose();
@@ -1084,7 +1129,7 @@ export class AtlasSemanticSession {
 			return result;
 		} catch (error) {
 			if (signal?.aborted) throw error;
-			if (this.#clients.delete(client.key)) {
+			if (!isContentModifiedError(error) && this.#clients.delete(client.key)) {
 				await stopClient(client, this.#options.shutdownTimeoutMs);
 			}
 			throw error;

@@ -56,6 +56,8 @@ if (process.argv.includes("--version")) {
 
 let buffer = Buffer.alloc(0);
 let nextServerRequest = 900;
+let contentModifiedDefinitions = Number(process.env.MOCK_CONTENT_MODIFIED_DEFINITIONS ?? 0);
+let contentModifiedCalls = Number(process.env.MOCK_CONTENT_MODIFIED_CALLS ?? 0);
 
 function record(message) {
 	if (process.env.MOCK_LSP_EVENTS) {
@@ -130,6 +132,15 @@ function handle(message) {
 	}
 	if (message.method === "textDocument/definition" && message.id !== undefined) {
 		if (process.env.MOCK_LSP_HANG_LOOKUP === "1") return;
+		if (contentModifiedDefinitions > 0) {
+			contentModifiedDefinitions -= 1;
+			send({
+				jsonrpc: "2.0",
+				id: message.id,
+				error: { code: -32801, message: "content modified" },
+			});
+			return;
+		}
 		send({
 			jsonrpc: "2.0",
 			id: message.id,
@@ -155,6 +166,15 @@ function handle(message) {
 	}
 	if (message.method === "textDocument/prepareCallHierarchy" && message.id !== undefined) {
 		if (process.env.MOCK_LSP_HANG_CALLS === "1") return;
+		if (contentModifiedCalls > 0) {
+			contentModifiedCalls -= 1;
+			send({
+				jsonrpc: "2.0",
+				id: message.id,
+				error: { code: -32801, message: "content modified" },
+			});
+			return;
+		}
 		const result = process.env.MOCK_CALL_ROOT_URI
 			? [callItem(process.env.MOCK_CALL_ROOT_URI, "root", 1, 7, { token: "root-data" })]
 			: null;
@@ -380,6 +400,68 @@ describe("Atlas semantic session", () => {
 		expect(messages.some((message) => message.method === "textDocument/didClose")).toBe(true);
 	});
 
+	test("retries content-modified locations without restarting the LSP", async () => {
+		const bin = temporaryDirectory("atlas-semantic-retry-bin-");
+		const root = temporaryDirectory("atlas-semantic-retry-repo-");
+		const eventsPath = join(root, "events.ndjson");
+		const executable = join(bin, "typescript-language-server");
+		const sourcePath = join(root, "src", "use.ts");
+		mkdirSync(join(root, "src"), { recursive: true });
+		writeFileSync(sourcePath, "const target = 1;\nconsole.log(target);\n");
+		writeExecutable(executable, MOCK_LSP_SOURCE);
+		const env = environmentWithPath(bin);
+		env.MOCK_LSP_EVENTS = eventsPath;
+		env.MOCK_DEFINITION_URI = pathToFileURL(sourcePath).href;
+		env.MOCK_REFERENCE_URI = pathToFileURL(sourcePath).href;
+		env.MOCK_CONTENT_MODIFIED_DEFINITIONS = "1";
+
+		const session = new AtlasSemanticSession({
+			env,
+			timeoutMs: 1_000,
+			initializeTimeoutMs: 2_000,
+			requestTimeoutMs: 2_000,
+		});
+		sessions.add(session);
+
+		await session.findLocations(root, "src/use.ts", 2, 13, "typescript");
+		await session.findLocations(root, "src/use.ts", 2, 13, "typescript");
+
+		const messages = readFileSync(eventsPath, "utf8")
+			.trim()
+			.split("\n")
+			.map((line) => JSON.parse(line) as { method?: string });
+		expect(messages.filter((message) => message.method === "initialize")).toHaveLength(1);
+		expect(
+			messages.filter((message) => message.method === "textDocument/definition"),
+		).toHaveLength(3);
+		expect(messages.some((message) => message.method === "shutdown")).toBe(false);
+	});
+
+	test("warms one shared LSP client for TypeScript and JavaScript", async () => {
+		const bin = temporaryDirectory("atlas-semantic-warm-bin-");
+		const root = temporaryDirectory("atlas-semantic-warm-repo-");
+		const eventsPath = join(root, "events.ndjson");
+		const executable = join(bin, "typescript-language-server");
+		writeExecutable(executable, MOCK_LSP_SOURCE);
+		const env = environmentWithPath(bin);
+		env.MOCK_LSP_EVENTS = eventsPath;
+
+		const session = new AtlasSemanticSession({
+			env,
+			timeoutMs: 1_000,
+			initializeTimeoutMs: 2_000,
+		});
+		sessions.add(session);
+
+		await session.warmLanguages(root, ["typescript", "javascript"]);
+
+		const messages = readFileSync(eventsPath, "utf8")
+			.trim()
+			.split("\n")
+			.map((line) => JSON.parse(line) as { method?: string });
+		expect(messages.filter((message) => message.method === "initialize")).toHaveLength(1);
+	});
+
 	test("uses clangd for C++ files and sends the C++ language identifier", async () => {
 		const bin = temporaryDirectory("atlas-semantic-cpp-bin-");
 		const root = temporaryDirectory("atlas-semantic-cpp-repo-");
@@ -546,6 +628,51 @@ describe("Atlas semantic session", () => {
 		expect(
 			messages.filter((message) => message.method === "callHierarchy/outgoingCalls"),
 		).toHaveLength(1);
+	});
+
+	test("retries content-modified call hierarchy responses", async () => {
+		const bin = temporaryDirectory("atlas-semantic-call-retry-bin-");
+		const root = temporaryDirectory("atlas-semantic-call-retry-repo-");
+		const eventsPath = join(root, "events.ndjson");
+		const executable = join(bin, "typescript-language-server");
+		const sourcePath = join(root, "src", "root.ts");
+		mkdirSync(join(root, "src"), { recursive: true });
+		writeFileSync(sourcePath, "export function root() {}\n");
+		writeExecutable(executable, MOCK_LSP_SOURCE);
+		const env = environmentWithPath(bin);
+		env.MOCK_LSP_EVENTS = eventsPath;
+		env.MOCK_CALL_ROOT_URI = pathToFileURL(sourcePath).href;
+		env.MOCK_CALLER_URI = pathToFileURL(sourcePath).href;
+		env.MOCK_CALLEE_URI = pathToFileURL(sourcePath).href;
+		env.MOCK_CONTENT_MODIFIED_CALLS = "1";
+
+		const session = new AtlasSemanticSession({
+			env,
+			timeoutMs: 1_000,
+			initializeTimeoutMs: 2_000,
+			requestTimeoutMs: 2_000,
+		});
+		sessions.add(session);
+
+		const hierarchy = await session.findCallHierarchy(
+			root,
+			"src/root.ts",
+			1,
+			17,
+			"typescript",
+		);
+
+		expect(hierarchy.root?.name).toBe("root");
+		const messages = readFileSync(eventsPath, "utf8")
+			.trim()
+			.split("\n")
+			.map((line) => JSON.parse(line) as { method?: string });
+		expect(
+			messages.filter(
+				(message) => message.method === "textDocument/prepareCallHierarchy",
+			),
+		).toHaveLength(2);
+		expect(messages.filter((message) => message.method === "initialize")).toHaveLength(1);
 	});
 
 	test("does not send call requests when the LSP omits call hierarchy capability", async () => {
