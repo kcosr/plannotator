@@ -1,5 +1,5 @@
 import { describe, expect, test } from 'bun:test';
-import { referencePositionFromToken } from './referencePosition';
+import { isInspectableSymbol, referencePositionFromToken } from './referencePosition';
 
 describe('referencePositionFromToken', () => {
   test('converts Pierre character offsets to exact one-based positions', () => {
@@ -26,5 +26,23 @@ describe('referencePositionFromToken', () => {
     });
 
     expect(position).toEqual({ symbol: 'value', line: 7, column: 5 });
+  });
+
+  test('accepts identifiers but rejects language keywords and punctuation', () => {
+    expect(isInspectableSymbol('poll_once')).toBe(true);
+    expect(isInspectableSymbol('Δvalue')).toBe(true);
+    expect(isInspectableSymbol('return')).toBe(false);
+    expect(isInspectableSymbol('::')).toBe(false);
+  });
+
+  test('does not inspect keyword tokens', () => {
+    expect(referencePositionFromToken({
+      type: 'token',
+      lineNumber: 3,
+      lineCharStart: 0,
+      lineCharEnd: 2,
+      tokenText: 'fn',
+      tokenElement: {} as HTMLElement,
+    })).toBeNull();
   });
 });

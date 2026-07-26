@@ -17,7 +17,7 @@ import {
 import { fetchCallHierarchy, fetchReferences, fetchSource } from './api';
 import { callLocationKey, filterCallTargets } from './callHierarchy';
 import { lineMatchesFilter, symbolMatchesFilter } from './codeFilter';
-import { referencePositionFromToken } from './referencePosition';
+import { isInspectableSymbol, referencePositionFromToken } from './referencePosition';
 import type {
   AtlasAnalyzers,
   AtlasNode,
@@ -55,7 +55,15 @@ const PIERRE_SOURCE_CSS = `
   :host { height: 100% !important; color-scheme: light dark; }
   [data-file], [data-code] { height: 100% !important; }
   [data-code] { overflow: auto !important; }
-  [data-token] { cursor: pointer; }
+  [data-char] { cursor: text; }
+  :host(.is-symbol-inspect-mode) [data-atlas-inspectable] {
+    cursor: pointer;
+  }
+  :host(.is-symbol-inspect-mode) [data-atlas-inspectable]:hover {
+    background: color-mix(in oklab, #22c55e 16%, transparent);
+    outline: 1px solid color-mix(in oklab, #22c55e 48%, transparent);
+    border-radius: 2px;
+  }
   [data-atlas-filtered-out] { opacity: .2; }
   [data-line][data-selected-line] {
     background: color-mix(in oklab, #3b82f6 30%, transparent) !important;
@@ -257,9 +265,12 @@ export function SourceView({
     error?: string;
   }>({ loading: false, result: null });
   const [copied, setCopied] = useState(false);
+  const [symbolInspectModifier, setSymbolInspectModifier] = useState(false);
   const [navigationHighlight, setNavigationHighlight] = useState<NavigationHighlight | null>(null);
   const hostRef = useRef<HTMLDivElement>(null);
+  const symbolListRef = useRef<HTMLDivElement>(null);
   const referenceRequestRef = useRef<AbortController | null>(null);
+  const suppressTokenLineClearRef = useRef(false);
   const renderStateRef = useRef({ node, codeFilter, navigationHighlight });
   renderStateRef.current = { node, codeFilter, navigationHighlight };
 
@@ -349,16 +360,24 @@ export function SourceView({
   }, [source, node, targetLine, targetColumn, targetSymbol, targetSelection, scrollToLine]);
 
   useEffect(() => {
-    if (!navigationHighlight) return;
-    const clearHighlight = () => setNavigationHighlight(null);
-    document.addEventListener('pointerdown', clearHighlight, { capture: true });
-    return () => document.removeEventListener('pointerdown', clearHighlight, { capture: true });
-  }, [navigationHighlight]);
-
-  useEffect(() => {
     if (matches.length === 0) return;
     setMatchIndex((current) => Math.min(current, matches.length - 1));
   }, [matches.length]);
+
+  useEffect(() => {
+    const updateModifier = (event: KeyboardEvent) => {
+      setSymbolInspectModifier(event.ctrlKey || event.metaKey);
+    };
+    const clearModifier = () => setSymbolInspectModifier(false);
+    document.addEventListener('keydown', updateModifier);
+    document.addEventListener('keyup', updateModifier);
+    window.addEventListener('blur', clearModifier);
+    return () => {
+      document.removeEventListener('keydown', updateModifier);
+      document.removeEventListener('keyup', updateModifier);
+      window.removeEventListener('blur', clearModifier);
+    };
+  }, []);
 
   const inspectSymbol = useCallback((symbol: string, line: number, column: number) => {
     const clean = symbol.trim();
@@ -421,17 +440,38 @@ export function SourceView({
     }
   }, [targetSymbol, targetLine, targetColumn, inspectSymbol]);
 
+  useEffect(() => {
+    const selectedSymbol = referenceState?.symbol;
+    if (!selectedSymbol) return;
+    const selectedItem = [
+      ...(symbolListRef.current?.querySelectorAll<HTMLElement>('[data-symbol-name]') ?? []),
+    ].find((item) => item.dataset.symbolName === selectedSymbol);
+    selectedItem?.scrollIntoView({ block: 'nearest', behavior: 'auto' });
+  }, [referenceState?.symbol]);
+
   const onTokenClick = useCallback((props: TokenEventBase, event: MouseEvent) => {
     if (!(event.metaKey || event.ctrlKey)) return;
     const position = referencePositionFromToken(props);
-    if (position) inspectSymbol(position.symbol, position.line, position.column);
-  }, [inspectSymbol]);
+    if (!position) return;
+    event.preventDefault();
+    event.stopPropagation();
+    suppressTokenLineClearRef.current = true;
+    window.setTimeout(() => {
+      suppressTokenLineClearRef.current = false;
+    }, 0);
+    highlightLocation(position.line, position.column, 'line');
+    inspectSymbol(position.symbol, position.line, position.column);
+  }, [highlightLocation, inspectSymbol]);
 
   const pierreFile = useMemo(() => source
     ? { name: node.name, contents: source.content }
     : null, [node.name, source]);
 
   const onLineClick = useCallback((props: LineEventBaseProps) => {
+    if (suppressTokenLineClearRef.current) {
+      suppressTokenLineClearRef.current = false;
+      return;
+    }
     if (props.lineNumber) setNavigationHighlight(null);
   }, []);
 
@@ -444,6 +484,9 @@ export function SourceView({
       const line = Number(element.dataset.line);
       if (!Number.isInteger(line)) continue;
       element.toggleAttribute('data-atlas-filtered-out', !lineMatchesFilter(current.node, line, current.codeFilter));
+    }
+    for (const element of shadowRoot.querySelectorAll<HTMLElement>('[data-char]')) {
+      element.toggleAttribute('data-atlas-inspectable', isInspectableSymbol(element.textContent));
     }
     shadowRoot.querySelectorAll<HTMLElement>('[data-atlas-target-token]').forEach(
       (element) => element.removeAttribute('data-atlas-target-token'),
@@ -592,7 +635,7 @@ export function SourceView({
               key={node.path}
               file={pierreFile}
               selectedLines={navigationHighlight?.range ?? null}
-              className="atlas-pierre-file"
+              className={`atlas-pierre-file${symbolInspectModifier ? ' is-symbol-inspect-mode' : ''}`}
               options={pierreOptions}
             />
           )}
@@ -614,11 +657,12 @@ export function SourceView({
             <small>{semanticProvider?.name ?? `${node.language ?? 'text'} · syntax only`}</small>
           </span>
         </div>
-        <div className="atlas-symbol-list">
+        <div className="atlas-symbol-list" ref={symbolListRef}>
           {visibleSymbols.map((symbol: AtlasSymbol) => (
             <button
               type="button"
               key={symbol.id}
+              data-symbol-name={symbol.name}
               className={`atlas-symbol-list-item${referenceState?.symbol === symbol.name ? ' is-active' : ''}`}
               onClick={() => {
                 highlightSymbol(symbol);
