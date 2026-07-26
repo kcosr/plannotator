@@ -12,8 +12,8 @@ plannotator/
 │   ├── hook/                     # Claude Code plugin (no commands/ — core skills installed to ~/.claude/skills act as slash commands)
 │   │   ├── .claude-plugin/plugin.json
 │   │   ├── hooks/hooks.json      # PermissionRequest hook config
-│   │   ├── server/index.ts       # Entry point (plan + review + annotate + archive subcommands)
-│   │   └── dist/                 # Built single-file apps (index.html, review.html)
+│   │   ├── server/index.ts       # Entry point (plan + review + explore + annotate + archive subcommands)
+│   │   └── dist/                 # Built single-file apps (index.html, review.html, explore.html)
 │   ├── opencode-plugin/          # OpenCode plugin
 │   │   ├── commands/             # Slash command stubs (review, annotate, last — plugin intercepts execution)
 │   │   ├── index.ts              # Plugin entry with submit_plan tool + review/annotate event handlers
@@ -39,6 +39,10 @@ plannotator/
 │   │   ├── index.html
 │   │   ├── index.tsx
 │   │   └── vite.config.ts
+│   ├── explore/                  # Codebase Atlas single-file web app
+│   │   ├── index.html
+│   │   ├── index.tsx
+│   │   └── vite.config.ts
 │   ├── vscode-extension/         # VS Code extension — opens plans in editor tabs
 │   │   ├── bin/                   # Router scripts (open-in-vscode, xdg-open)
 │   │   ├── src/                   # extension.ts, cookie-proxy.ts, ipc-server.ts, panel-manager.ts, editor-annotations.ts, vscode-theme.ts
@@ -57,6 +61,7 @@ plannotator/
 │   │   ├── index.ts              # startPlannotatorServer(), handleServerReady()
 │   │   ├── review.ts             # startReviewServer(), handleReviewServerReady()
 │   │   ├── annotate.ts           # startAnnotateServer(), handleAnnotateServerReady()
+│   │   ├── explore.ts            # startExploreServer(), repository Atlas API
 │   │   ├── storage.ts            # Re-exports from @plannotator/shared/storage
 │   │   ├── share-url.ts          # Server-side share URL generation for remote sessions
 │   │   ├── remote.ts             # isRemoteSession(), getServerPort()
@@ -85,12 +90,15 @@ plannotator/
 │   ├── ai/                       # Provider-agnostic AI backbone (providers, sessions, endpoints)
 │   ├── core/                     # @plannotator/core — browser-safe, zero-dep universal slice (pure utils + types) shared by ui + shared; published so @plannotator/ui can be installed standalone. `shared` re-exports the moved modules via one-line shims so Plannotator is unchanged.
 │   ├── shared/                   # Node/git/server logic + cross-runtime types (re-exports browser-safe modules from @plannotator/core)
+│   │   ├── atlas.ts              # Bounded repository index, metrics, symbols, dependencies
+│   │   ├── atlas-source.ts       # Contained source reads and reference search
 │   │   ├── storage.ts            # Plan saving, version history, archive listing (node:fs only)
 │   │   ├── draft.ts              # Annotation draft persistence (node:fs only)
 │   │   └── project.ts            # Pure string helpers (sanitizeTag, extractRepoName, extractDirName)
 │   ├── editor/                   # Plan review app
 │   │   ├── App.tsx               # Main plan review app
 │   │   └── shortcuts.ts          # planReviewSurface + annotateSurface — composes plan-review scopes into per-surface registries
+│   ├── atlas/                    # Codebase Atlas block/dependency/symbol/source UI
 │   └── review-editor/            # Code review UI
 │       ├── App.tsx               # Main review app
 │       ├── shortcuts.ts          # codeReviewSurface — composes code-review scopes into the review registry
@@ -406,6 +414,17 @@ During normal plan review, an Archive sidebar tab provides the same browsing via
 | `/api/external-annotations` | PATCH | Update fields on a single annotation (`?id=`) |
 | `/api/external-annotations` | DELETE | Remove by `?id=`, `?source=`, or clear all |
 
+### Explore Server (`packages/server/explore.ts`)
+
+| Endpoint | Method | Purpose |
+| -------- | ------ | ------- |
+| `/api/atlas/status` | GET | Report asynchronous repository indexing state |
+| `/api/atlas` | GET | Return the normalized hierarchy, metrics, symbols, and dependencies |
+| `/api/atlas/source` | GET | Read a contained source file (`?path=`) |
+| `/api/atlas/references` | GET | Find indexed definitions and references (`?symbol=&path=`) |
+| `/api/atlas/refresh` | POST | Rebuild the repository snapshot |
+| `/api/atlas/close` | POST | Close the Explore session |
+
 All servers use random ports locally or fixed port (`19432`) in remote mode.
 
 ### Paste Service (`apps/paste-service/`)
@@ -595,6 +614,7 @@ bun install
 # Run any app
 bun run dev:hook       # Hook server (plan review)
 bun run dev:review     # Review editor (code review)
+bun run dev:explore    # Codebase Atlas
 bun run dev:portal     # Portal editor
 bun run dev:marketing  # Marketing site
 bun run dev:vscode     # VS Code extension (watch mode)
@@ -607,6 +627,7 @@ bun run dev:vscode     # VS Code extension (watch mode)
 ```bash
 bun run build:hook       # Single-file HTML for hook server
 bun run build:review     # Code review editor
+bun run build:explore    # Codebase Atlas
 bun run build:opencode   # OpenCode plugin (copies HTML from hook + review)
 bun run build:portal     # Static build for share.plannotator.ai
 bun run build:marketing  # Static build for plannotator.ai
@@ -617,18 +638,19 @@ bun run build            # Build hook + opencode (main targets)
 
 **Important: Tailwind `@source` paths.** When creating new directories that contain `.tsx` files with Tailwind classes, add a matching `@source` entry to the app's `index.css`. Tailwind only generates CSS for classes it finds in scanned files — missing paths means classes appear in the DOM but have no effect.
 
-**Important: Build order matters.** The hook build (`build:hook`) copies pre-built HTML from `apps/review/dist/`. If you change UI code in `packages/ui/`, `packages/editor/`, or `packages/review-editor/`, you **must** rebuild the review app first, then the hook:
+**Important: Build order matters.** The root `build:hook` script builds Review and
+Explore before embedding their HTML in the hook artifact. Use the root script
+when either UI changes:
 
 ```bash
-bun run --cwd apps/review build && bun run build:hook   # For review UI changes
-bun run build:hook                                       # For plan UI changes only
-bun run build:hook && bun run build:opencode             # For OpenCode plugin
+bun run build:hook                            # Plan, Review, and Explore artifacts
+bun run build:hook && bun run build:opencode  # OpenCode plugin
 ```
 
-Running only `build:hook` after review-editor changes will copy stale HTML files. When testing locally with a compiled binary, the full sequence is:
+When testing locally with a compiled binary, the full sequence is:
 
 ```bash
-bun run --cwd apps/review build && bun run build:hook && \
+bun run build:hook && \
   bun build apps/hook/server/index.ts --compile --outfile ~/.local/bin/plannotator
 ```
 

@@ -13,10 +13,11 @@
  * - plannotator_submit_plan tool with browser-based visual approval
  * - [DONE:n] markers for execution progress tracking
  * - /plannotator-review command for code review
+ * - /plannotator-explore command for Codebase Atlas
  * - /plannotator-annotate command for markdown annotation
  */
 
-import { existsSync, readFileSync, statSync } from "node:fs";
+import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
 import { basename, resolve } from "node:path";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { Type } from "@earendil-works/pi-ai";
@@ -36,9 +37,11 @@ import { readImprovementHook } from "./generated/improvement-hooks.ts";
 import { composeImproveContext } from "./generated/pfm-reminder.ts";
 import {
 	hasPlanBrowserHtml,
+	hasExploreBrowserHtml,
 	hasReviewBrowserHtml,
 	getStartupErrorMessage,
 	startCodeReviewBrowserSession,
+	startCodebaseExploreBrowserSession,
 	startLastMessageAnnotationSession,
 	startMarkdownAnnotationSession,
 	openPlanReviewBrowser,
@@ -506,6 +509,54 @@ export default function plannotator(pi: ExtensionAPI): void {
 			} catch (err) {
 				ctx.ui.notify(
 					`Failed to start code review UI: ${getStartupErrorMessage(err)}`,
+					"error",
+				);
+			}
+		},
+	});
+
+	pi.registerCommand("plannotator-explore", {
+		description: "Open Codebase Atlas for the current directory or a supplied repository path",
+		handler: async (args, ctx) => {
+			if (!hasExploreBrowserHtml()) {
+				ctx.ui.notify(
+					"Codebase Atlas UI not available. Rebuild the pi-extension assets.",
+					"error",
+				);
+				return;
+			}
+
+			const requestedPath = (args ?? "").trim() || ".";
+			let rootPath: string;
+			try {
+				const { resolveUserPath } = await import("./generated/resolve-file.ts");
+				rootPath = realpathSync(resolveUserPath(requestedPath, ctx.cwd));
+				if (!statSync(rootPath).isDirectory()) {
+					throw new Error("Path is not a directory");
+				}
+			} catch {
+				ctx.ui.notify(`Codebase Atlas path not found: ${requestedPath}`, "error");
+				return;
+			}
+
+			currentPiSession.update(ctx);
+			const origin = getPiSessionIdentity(ctx);
+			try {
+				const session = await startCodebaseExploreBrowserSession(ctx, rootPath);
+				ctx.ui.notify(sessionOpenedMessage("Codebase Atlas opened", session.url), "info");
+				void session
+					.waitForClose()
+					.then(() => {
+						session.stop();
+						safeNotify(ctx, "Codebase Atlas session closed.", "info", origin);
+					})
+					.catch((error) => {
+						session.stop();
+						reportBackgroundError(ctx, "Codebase Atlas session failed", error, origin);
+					});
+			} catch (error) {
+				ctx.ui.notify(
+					`Failed to start Codebase Atlas: ${getStartupErrorMessage(error)}`,
 					"error",
 				);
 			}

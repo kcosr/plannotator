@@ -1,7 +1,7 @@
 /**
  * Plannotator CLI for Claude Code, Droid, Codex, Gemini CLI, and Copilot CLI
  *
- * Supports twelve modes:
+ * Supports thirteen modes:
  *
  * 1. Plan Review (default, no args):
  *    - Spawned by Claude/Gemini/Codex hook entrypoints
@@ -13,46 +13,50 @@
  *    - Runs git diff, opens review UI
  *    - Outputs feedback to stdout (captured by slash command)
  *
- * 3. Annotate (`plannotator annotate <file.md | file.txt>`):
+ * 3. Explore (`plannotator explore [path]`):
+ *    - Starts a repository indexer and interactive codebase atlas
+ *    - Runs until the browser closes the session or the process receives a signal
+ *
+ * 4. Annotate (`plannotator annotate <file.md | file.txt>`):
  *    - Triggered by /plannotator-annotate slash command
  *    - Opens any markdown file in the annotation UI
  *    - Outputs structured feedback to stdout
  *
- * 4. Archive (`plannotator archive`):
+ * 5. Archive (`plannotator archive`):
  *    - Opens read-only browser for saved plan decisions
  *    - Lists plans from ~/.plannotator/plans/ with status badges
  *    - Done button closes the browser
  *
- * 5. Sessions (`plannotator sessions`):
+ * 6. Sessions (`plannotator sessions`):
  *    - Lists active Plannotator server sessions
  *    - `--open [N]` reopens a session in the browser
  *    - `--clean` removes stale session files
  *
- * 6. Copilot Plan (`plannotator copilot-plan`):
+ * 7. Copilot Plan (`plannotator copilot-plan`):
  *    - Spawned by preToolUse hook (Copilot CLI)
  *    - Intercepts exit_plan_mode, reads plan.md from session state
  *    - Outputs permissionDecision JSON to stdout
  *
- * 7. Copilot Last (`plannotator copilot-last`):
+ * 8. Copilot Last (`plannotator copilot-last`):
  *    - Annotate the last assistant message from a Copilot CLI session
  *    - Parses events.jsonl from session state
  *
- * 8. Goal Setup (`plannotator setup-goal interview|facts <bundle.json>`):
+ * 9. Goal Setup (`plannotator setup-goal interview|facts <bundle.json>`):
  *    - Opens the bundled question or facts acceptance UI
  *    - Outputs structured JSON for setup-goal workflows
  *
- * 9. OpenCode Plan (`plannotator opencode-plan`):
+ * 10. OpenCode Plan (`plannotator opencode-plan`):
  *    - Internal bridge mode used by the OpenCode plugin CLI fallback
  *    - Reads `{ plan, timeoutSeconds, sharingEnabled, agents }` from stdin
  *    - Outputs structured JSON for the plugin
  *
- * 10. OpenCode Review (`plannotator opencode-review`):
+ * 11. OpenCode Review (`plannotator opencode-review`):
  *    - Internal structured review bridge used by the OpenCode plugin CLI fallback
  *
- * 11. OpenCode Last (`plannotator opencode-annotate-last`):
+ * 12. OpenCode Last (`plannotator opencode-annotate-last`):
  *    - Internal structured last-message annotation bridge for OpenCode
  *
- * 12. Improve Context (`plannotator improve-context`):
+ * 13. Improve Context (`plannotator improve-context`):
  *    - Spawned by PreToolUse hook on EnterPlanMode
  *    - Reads improvement hook file from ~/.plannotator/hooks/
  *    - Returns additionalContext or silently passes through
@@ -79,6 +83,10 @@ import {
   startAnnotateServer,
   handleAnnotateServerReady,
 } from "@plannotator/server/annotate";
+import {
+  startExploreServer,
+  handleExploreServerReady,
+} from "@plannotator/server/explore";
 import {
   startGoalSetupServer,
   handleGoalSetupServerReady,
@@ -155,6 +163,10 @@ const planHtmlContent = planHtml as unknown as string;
 // @ts-ignore - Bun import attribute for text
 import reviewHtml from "../dist/review.html" with { type: "text" };
 const reviewHtmlContent = reviewHtml as unknown as string;
+
+// @ts-ignore - Bun import attribute for text
+import exploreHtml from "../dist/explore.html" with { type: "text" };
+const exploreHtmlContent = exploreHtml as unknown as string;
 
 // Check for subcommand
 const args = process.argv.slice(2);
@@ -465,6 +477,55 @@ if (args[0] === "sessions") {
     console.error(`  #${i + 1}  ${s.mode.padEnd(9)} ${s.project.padEnd(20)} ${s.url.padEnd(28)} ${ageStr} ago`);
   }
   console.error(`\nReopen with: plannotator sessions --open [N]`);
+  process.exit(0);
+
+} else if (args[0] === "explore") {
+  // ============================================
+  // CODEBASE EXPLORER MODE
+  // ============================================
+
+  if (args.length > 2) {
+    console.error("Usage: plannotator explore [path]");
+    process.exit(1);
+  }
+
+  const requestedRoot = args[1] ?? process.cwd();
+  let rootPath: string;
+  try {
+    rootPath = realpathSync(path.resolve(requestedRoot));
+    if (!statSync(rootPath).isDirectory()) {
+      throw new Error("not a directory");
+    }
+  } catch {
+    console.error(`Explore path is not a directory: ${requestedRoot}`);
+    process.exit(1);
+  }
+
+  const project = path.basename(rootPath) || rootPath;
+  const server = await startExploreServer({
+    rootPath,
+    htmlContent: exploreHtmlContent,
+    onReady: (url, isRemote, port) => {
+      return handleExploreServerReady(url, isRemote, port);
+    },
+  });
+  const stopOnExit = () => server.stop();
+  process.once("exit", stopOnExit);
+
+  registerSession({
+    pid: process.pid,
+    port: server.port,
+    url: server.url,
+    mode: "explore",
+    project,
+    startedAt: new Date().toISOString(),
+    label: `explore-${project}`,
+  });
+
+  await server.waitForClose();
+  await Bun.sleep(250);
+  process.removeListener("exit", stopOnExit);
+  server.stop();
   process.exit(0);
 
 } else if (args[0] === "setup-goal") {

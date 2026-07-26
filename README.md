@@ -113,6 +113,18 @@ plannotator review --gitbutler         # Review an active GitButler workspace
 
 GitButler users can review the whole workspace, one stack, or one branch layer. See the [GitButler workflow guide](https://docs.plannotator.ai/open-source/workflows/gitbutler).
 
+### Explore a codebase
+
+```
+plannotator explore                    # Explore the repository in the current directory
+plannotator explore ./path/to/repo     # Explore another local repository
+```
+
+Explore opens a local Codebase Atlas with linked Overview, Symbols, and
+read-only Source views. Overview can toggle relationship analysis and its
+dependency inspector without leaving the active treemap. The repository is
+indexed after the local listener starts, and the UI reports scan progress.
+
 ### Plan mode
 
 No command needed. Plan mode is wired in through each harness's hooks. Any time your agent creates a plan, the markdown review surface opens for you.

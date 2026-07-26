@@ -33,6 +33,7 @@ export function formatTopLevelHelp(): string {
     "  plannotator --version, -v",
     "  plannotator [--browser <name>]",
     "  plannotator review [--git | --gitbutler] [PR_URL]",
+    "  plannotator explore [path]",
     "  plannotator annotate <file.md | file.txt | file.html | https://... | folder/>  [--markdown] [--no-jina] [--gate] [--json] [--hook]",
     "  plannotator annotate-last [--stdin] [--gate] [--json] [--hook]",
     "  plannotator setup-goal <interview|facts> <bundle.json | -> [--json]",
@@ -55,6 +56,15 @@ export function formatTopLevelHelp(): string {
 // usage on stdout instead of accidentally launching the browser UI — running
 // `review --help` used to fall through to local review mode and open a tab.
 const SUBCOMMAND_HELP: Record<string, string> = {
+  explore: [
+    "Usage:",
+    "  plannotator explore [path]",
+    "",
+    "Open an interactive codebase atlas for a directory.",
+    "",
+    "Arguments:",
+    "  path          Directory to explore (default: current directory)",
+  ].join("\n"),
   review: [
     "Usage:",
     "  plannotator review [--git | --gitbutler] [--local | --no-local] [PR_URL]",
@@ -167,6 +177,7 @@ export function formatInteractiveNoArgClarification(): string {
     "",
     "For interactive use, try:",
     "  plannotator review",
+    "  plannotator explore [path]",
     "  plannotator annotate <file.md | file.txt | file.html | https://...>",
     "  plannotator setup-goal interview bundle.json --json",
     "  plannotator last",

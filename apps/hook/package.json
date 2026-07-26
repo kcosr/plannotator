@@ -5,7 +5,7 @@
   "type": "module",
   "scripts": {
     "dev": "vite",
-    "build": "vite build && cp dist/index.html dist/redline.html && cp ../review/dist/index.html dist/review.html",
+    "build": "bunx --bun vite build && cp dist/index.html dist/redline.html && cp ../review/dist/index.html dist/review.html && cp ../explore/dist/index.html dist/explore.html",
     "serve": "bun run server/index.ts"
   },
   "dependencies": {

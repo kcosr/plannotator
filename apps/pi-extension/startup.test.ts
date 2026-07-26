@@ -53,6 +53,7 @@ describe("Pi extension startup boundary", () => {
 		const browser = await first;
 		expect(browser.startPlanReviewBrowserSession).toBeFunction();
 		expect(browser.startCodeReviewBrowserSession).toBeFunction();
+		expect(browser.startCodebaseExploreBrowserSession).toBeFunction();
 		expect(browser.startMarkdownAnnotationSession).toBeFunction();
 	});
 
@@ -63,5 +64,6 @@ describe("Pi extension startup boundary", () => {
 
 		expect(Array.isArray(manifest.files)).toBe(true);
 		expect(manifest.files).toContain("plannotator-browser-runtime.ts");
+		expect(manifest.files).toContain("codebase-atlas.html");
 	});
 });

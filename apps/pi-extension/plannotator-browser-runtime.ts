@@ -7,10 +7,12 @@ type PlannotatorBrowserModule = typeof import("./plannotator-browser.ts");
 const moduleDirectory = dirname(fileURLToPath(import.meta.url));
 const planHtmlPath = resolve(moduleDirectory, "plannotator.html");
 const reviewHtmlPath = resolve(moduleDirectory, "review-editor.html");
+const exploreHtmlPath = resolve(moduleDirectory, "codebase-atlas.html");
 
 let browserModulePromise: Promise<PlannotatorBrowserModule> | undefined;
 let planHtmlContent: string | undefined;
 let reviewHtmlContent: string | undefined;
+let exploreHtmlContent: string | undefined;
 
 function hasReadableAsset(path: string, cachedContent: string | undefined): boolean {
 	if (cachedContent) return true;
@@ -41,6 +43,11 @@ export function hasReviewBrowserHtml(): boolean {
 	return hasReadableAsset(reviewHtmlPath, reviewHtmlContent);
 }
 
+/** Return whether the built Codebase Atlas UI is available without reading it into memory. */
+export function hasExploreBrowserHtml(): boolean {
+	return hasReadableAsset(exploreHtmlPath, exploreHtmlContent);
+}
+
 /** Read and cache the built plan/annotation/archive UI on first use. */
 export function getPlanBrowserHtml(): string {
 	const content = readBrowserAsset(planHtmlPath, planHtmlContent);
@@ -52,6 +59,13 @@ export function getPlanBrowserHtml(): string {
 export function getReviewBrowserHtml(): string {
 	const content = readBrowserAsset(reviewHtmlPath, reviewHtmlContent);
 	if (content) reviewHtmlContent = content;
+	return content;
+}
+
+/** Read and cache the built Codebase Atlas UI on first use. */
+export function getExploreBrowserHtml(): string {
+	const content = readBrowserAsset(exploreHtmlPath, exploreHtmlContent);
+	if (content) exploreHtmlContent = content;
 	return content;
 }
 

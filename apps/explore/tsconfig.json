@@ -1,0 +1,17 @@
+{
+  "compilerOptions": {
+    "target": "ES2022",
+    "module": "ESNext",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "skipLibCheck": true,
+    "moduleResolution": "bundler",
+    "isolatedModules": true,
+    "moduleDetection": "force",
+    "jsx": "react-jsx",
+    "allowImportingTsExtensions": true,
+    "strict": true,
+    "noEmit": true
+  },
+  "include": ["**/*.ts", "**/*.tsx", "../../packages/atlas/**/*.ts", "../../packages/atlas/**/*.tsx"],
+  "exclude": ["../../packages/atlas/**/*.test.ts", "../../packages/atlas/**/*.test.tsx"]
+}

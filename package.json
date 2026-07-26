@@ -22,18 +22,20 @@
     "dev:portal": "bun run --cwd apps/portal dev",
     "dev:marketing": "bun run --cwd apps/marketing dev",
     "dev:review": "bun run --cwd apps/review dev",
-    "build:hook": "bun run --cwd apps/hook build",
+    "dev:explore": "bun run --cwd apps/explore dev",
+    "build:hook": "bun run build:review && bun run build:explore && bun run --cwd apps/hook build",
     "build:portal": "bun run --cwd apps/portal build",
     "build:marketing": "bun run --cwd apps/marketing build",
     "build:opencode": "bun run --cwd apps/opencode-plugin build",
     "build:review": "bun run --cwd apps/review build",
-    "build:pi": "bun run build:review && bun run build:hook && bun run --cwd apps/pi-extension build",
+    "build:explore": "bun run --cwd apps/explore build",
+    "build:pi": "bun run build:hook && bun run --cwd apps/pi-extension build",
     "build": "bun run build:hook && bun run build:opencode",
     "dev:vscode": "bun run --cwd apps/vscode-extension watch",
     "build:vscode": "bun run --cwd apps/vscode-extension build",
     "package:vscode": "bun run --cwd apps/vscode-extension package",
     "test": "bun test",
-    "typecheck": "bash apps/pi-extension/vendor.sh && tsc --noEmit -p packages/core/tsconfig.json && tsc --noEmit -p packages/shared/tsconfig.json && tsc --noEmit -p packages/ai/tsconfig.json && tsc --noEmit -p packages/server/tsconfig.json && tsc --noEmit -p packages/ui/tsconfig.json && tsc --noEmit -p packages/ui/tsconfig.strict-consumer.json && tsc --noEmit -p apps/pi-extension/tsconfig.json",
+    "typecheck": "bash apps/pi-extension/vendor.sh && tsc --noEmit -p packages/core/tsconfig.json && tsc --noEmit -p packages/shared/tsconfig.json && tsc --noEmit -p packages/atlas/tsconfig.json && tsc --noEmit -p packages/ai/tsconfig.json && tsc --noEmit -p packages/server/tsconfig.json && tsc --noEmit -p packages/ui/tsconfig.json && tsc --noEmit -p packages/ui/tsconfig.strict-consumer.json && tsc --noEmit -p apps/explore/tsconfig.json && tsc --noEmit -p apps/pi-extension/tsconfig.json",
     "build:ui-css": "bun run --cwd packages/ui build:css"
   },
   "dependencies": {
@@ -49,6 +51,7 @@
   "devDependencies": {
     "@types/node": "^25.5.2",
     "@types/turndown": "^5.0.6",
-    "bun-types": "^1.3.11"
+    "bun-types": "^1.3.11",
+    "typescript": "~5.8.2"
   }
 }

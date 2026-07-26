@@ -2,7 +2,7 @@
  * Route Parity Test
  *
  * Extracts all API routes from Bun and Pi server files and asserts
- * they are identical per server (plan, review, annotate) plus shared
+ * they are identical per server (plan, review, annotate, explore) plus shared
  * delegated handlers (editor annotations, AI endpoints).
  */
 
@@ -48,6 +48,7 @@ const bun = {
   plan: join(ROOT, "packages/server/index.ts"),
   review: join(ROOT, "packages/server/review.ts"),
   annotate: join(ROOT, "packages/server/annotate.ts"),
+  explore: join(ROOT, "packages/server/explore.ts"),
   editorAnnotations: join(ROOT, "packages/server/editor-annotations.ts"),
 };
 
@@ -55,6 +56,7 @@ const pi = {
   plan: join(ROOT, "apps/pi-extension/server/serverPlan.ts"),
   review: join(ROOT, "apps/pi-extension/server/serverReview.ts"),
   annotate: join(ROOT, "apps/pi-extension/server/serverAnnotate.ts"),
+  explore: join(ROOT, "apps/pi-extension/server/serverExplore.ts"),
   editorAnnotations: join(ROOT, "apps/pi-extension/server/annotations.ts"),
 };
 
@@ -81,6 +83,12 @@ describe("route parity: Bun ↔ Pi", () => {
     expect(piRoutes).toEqual(bunRoutes);
   });
 
+  test("explore server routes match", () => {
+    const bunRoutes = unique(extractInlineRoutes(bun.explore));
+    const piRoutes = unique(extractInlineRoutes(pi.explore));
+    expect(piRoutes).toEqual(bunRoutes);
+  });
+
   test("editor annotation routes match", () => {
     const bunRoutes = unique(extractInlineRoutes(bun.editorAnnotations));
     const piRoutes = unique(extractInlineRoutes(pi.editorAnnotations));
@@ -103,6 +111,7 @@ describe("route parity: Bun ↔ Pi", () => {
       ...extractInlineRoutes(bun.plan),
       ...extractInlineRoutes(bun.review),
       ...extractInlineRoutes(bun.annotate),
+      ...extractInlineRoutes(bun.explore),
       ...extractInlineRoutes(bun.editorAnnotations),
       ...extractAIEndpointKeys(aiEndpointsFile),
     ]);
@@ -111,6 +120,7 @@ describe("route parity: Bun ↔ Pi", () => {
       ...extractInlineRoutes(pi.plan),
       ...extractInlineRoutes(pi.review),
       ...extractInlineRoutes(pi.annotate),
+      ...extractInlineRoutes(pi.explore),
       ...extractInlineRoutes(pi.editorAnnotations),
       ...extractAIEndpointKeys(aiEndpointsFile),
     ]);

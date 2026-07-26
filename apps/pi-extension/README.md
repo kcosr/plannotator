@@ -33,7 +33,7 @@ bun install
 bun run build:pi
 ```
 
-This builds the plan review and code review UIs and copies them into `apps/pi-extension/`.
+This builds the plan review, code review, and Codebase Atlas UIs and copies them into `apps/pi-extension/`.
 
 ## Usage
 
@@ -167,6 +167,20 @@ Use these inside `systemPrompt` strings:
 
 Run `/plannotator-review` to open your current VCS changes in the code review UI. Annotate specific lines, switch between the modes supported by the detected Git, GitButler, or JJ provider, and submit feedback that gets sent to the agent. Pass `--git` or `--gitbutler` to force that provider; GitButler requires `but` 0.21.0 or newer on `PATH`.
 
+### Codebase Atlas
+
+Run `/plannotator-explore` to open a visual, read-only map of the current working
+directory. Pass a directory to inspect another local repository:
+
+```text
+/plannotator-explore ../another-project
+```
+
+The listener starts on demand, indexes the repository after binding, and stays
+available until the Atlas window is closed. Source navigation and symbol
+references use the same index and API contract as the standalone
+`plannotator explore` command.
+
 ### Shared Plannotator event API
 
 Plannotator also listens on the shared `plannotator:request` event channel so other extensions can reuse the same browser review flows without importing Plannotator internals.
@@ -211,6 +225,7 @@ During execution, the agent marks completed steps with `[DONE:n]` markers. Progr
 |---------|-------------|
 | `/plannotator` | Toggle plan mode. The agent writes a markdown plan file anywhere in the working directory and submits its path |
 | `/plannotator-review` | Open code review UI for current changes |
+| `/plannotator-explore [path]` | Open Codebase Atlas for a local repository |
 | `/plannotator-annotate <file>` | Open markdown file in annotation UI |
 | `/plannotator-last` | Annotate the last assistant message |
 

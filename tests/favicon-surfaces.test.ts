@@ -105,6 +105,7 @@ describe("favicon surfaces", () => {
     for (const path of [
       "apps/hook/index.html",
       "apps/review/index.html",
+      "apps/explore/index.html",
       "apps/portal/index.html",
     ]) {
       expect((await readRepoFile(path)).toString()).toContain(APP_FAVICON_LINK);

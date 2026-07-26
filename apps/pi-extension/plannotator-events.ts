@@ -9,12 +9,20 @@ import {
 } from "./assistant-message.ts";
 import {
 	getStartupErrorMessage,
+	hasExploreBrowserHtml,
 	hasPlanBrowserHtml,
 	hasReviewBrowserHtml,
 	loadPlannotatorBrowser,
 } from "./plannotator-browser-runtime.ts";
 
 type PlannotatorBrowserModule = typeof import("./plannotator-browser.ts");
+
+/** Start a Codebase Atlas session after loading the browser/server graph on demand. */
+export function startCodebaseExploreBrowserSession(
+	...args: Parameters<PlannotatorBrowserModule["startCodebaseExploreBrowserSession"]>
+): ReturnType<PlannotatorBrowserModule["startCodebaseExploreBrowserSession"]> {
+	return loadPlannotatorBrowser().then((browser) => browser.startCodebaseExploreBrowserSession(...args));
+}
 
 /** Start a plan-review browser session after loading the browser/server graph on demand. */
 export function startPlanReviewBrowserSession(
@@ -425,6 +433,7 @@ export function registerPlannotatorEventListeners(
 
 export {
 	getLastAssistantMessageText,
+	hasExploreBrowserHtml,
 	hasPlanBrowserHtml,
 	hasReviewBrowserHtml,
 	getStartupErrorMessage,

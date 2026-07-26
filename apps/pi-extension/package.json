@@ -41,10 +41,11 @@
     "generated/",
     "README.md",
     "plannotator.html",
-    "review-editor.html"
+    "review-editor.html",
+    "codebase-atlas.html"
   ],
   "scripts": {
-    "build": "cp ../hook/dist/index.html plannotator.html && cp ../hook/dist/review.html review-editor.html && bash vendor.sh",
+    "build": "cp ../hook/dist/index.html plannotator.html && cp ../hook/dist/review.html review-editor.html && cp ../hook/dist/explore.html codebase-atlas.html && bash vendor.sh",
     "prepublishOnly": "cd ../.. && bun run build:pi"
   },
   "dependencies": {

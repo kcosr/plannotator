@@ -26,6 +26,7 @@ describe("CLI top-level help", () => {
     expect(output).toContain("plannotator --version, -v");
     expect(output).toContain("plannotator [--browser <name>]");
     expect(output).toContain("plannotator review [--git | --gitbutler] [PR_URL]");
+    expect(output).toContain("plannotator explore [path]");
     expect(output).toContain("plannotator annotate <file.md | file.txt | file.html | https://... | folder/>");
     expect(output).toContain("[--markdown] [--no-jina]");
     expect(output).toContain("plannotator annotate-last [--stdin]");
@@ -79,6 +80,7 @@ describe("CLI subcommand help", () => {
       "annotate",
       "setup-goal",
       "archive",
+      "explore",
       "sessions",
       "improve-context",
     ]) {
@@ -96,6 +98,9 @@ describe("CLI subcommand help", () => {
   test("renders subcommand-specific usage", () => {
     expect(formatSubcommandHelp("review")).toContain(
       "plannotator review [--git | --gitbutler]",
+    );
+    expect(formatSubcommandHelp("explore")).toContain(
+      "plannotator explore [path]",
     );
     expect(formatSubcommandHelp("review")).toContain("--gitbutler");
     expect(formatSubcommandHelp("review")).toContain("PR_URL");
@@ -134,6 +139,7 @@ describe("interactive no-arg invocation", () => {
     expect(output).toContain("usually launched automatically by Claude Code hooks");
     expect(output).toContain("It expects hook JSON on stdin.");
     expect(output).toContain("plannotator review");
+    expect(output).toContain("plannotator explore [path]");
     expect(output).toContain("plannotator setup-goal interview bundle.json --json");
     expect(output).toContain("plannotator sessions");
     expect(output).toContain("Run 'plannotator --help' for top-level usage.");

@@ -1,0 +1,29 @@
+{
+  "name": "@plannotator/atlas",
+  "version": "0.0.1",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "typecheck": "tsc --noEmit",
+    "test": "bun test"
+  },
+  "exports": {
+    ".": "./index.ts",
+    "./styles": "./styles.css",
+    "./worker-pool": "./workerPool.tsx"
+  },
+  "dependencies": {
+    "@fontsource-variable/geist-mono": "5.2.7",
+    "@fontsource-variable/inter": "^5.2.8",
+    "@pierre/diffs": "1.2.8",
+    "@plannotator/ui": "workspace:*",
+    "lucide-react": "^1.14.0",
+    "react": "^19.2.3",
+    "react-dom": "^19.2.3"
+  },
+  "devDependencies": {
+    "@types/react": "^19.2.0",
+    "@types/react-dom": "^19.2.0",
+    "typescript": "~5.8.2"
+  }
+}

@@ -15,6 +15,7 @@ import {
 	runVcsDiff,
 	stageFile,
 	startAnnotateServer,
+	startExploreServer,
 	startPlanReviewServer,
 	startReviewServer,
 	type DiffType,
@@ -40,6 +41,7 @@ import {
 } from "./generated/review-workspace.ts";
 import {
 	getPlanBrowserHtml,
+	getExploreBrowserHtml,
 	getReviewBrowserHtml,
 	getStartupErrorMessage,
 	hasPlanBrowserHtml,
@@ -48,6 +50,7 @@ import {
 export { getLastAssistantMessageText } from "./assistant-message.ts";
 export {
 	getStartupErrorMessage,
+	hasExploreBrowserHtml,
 	hasPlanBrowserHtml,
 	hasReviewBrowserHtml,
 } from "./plannotator-browser-runtime.ts";
@@ -64,6 +67,12 @@ export interface PlanReviewDecision {
 export interface BrowserDecisionSession<T> {
 	url: string;
 	waitForDecision: () => Promise<T>;
+	stop: () => void;
+}
+
+export interface BrowserExploreSession {
+	url: string;
+	waitForClose: () => Promise<void>;
 	stop: () => void;
 }
 
@@ -232,6 +241,36 @@ export async function openPlanReviewBrowser(
 ): Promise<PlanReviewDecision> {
 	const session = await startPlanReviewBrowserSession(ctx, planContent);
 	return session.waitForDecision();
+}
+
+export async function startCodebaseExploreBrowserSession(
+	ctx: ExtensionContext,
+	rootPath: string,
+): Promise<BrowserExploreSession> {
+	if (!ctx.hasUI) {
+		throw new Error("Plannotator Codebase Atlas is unavailable in this session.");
+	}
+	const exploreHtmlContent = getExploreBrowserHtml();
+	if (!exploreHtmlContent) {
+		throw new Error("Plannotator Codebase Atlas assets are unavailable in this session.");
+	}
+
+	const server = await startExploreServer({
+		rootPath,
+		htmlContent: exploreHtmlContent,
+	});
+	try {
+		await openBrowserForServer(server.url, ctx);
+	} catch (error) {
+		server.stop();
+		throw error;
+	}
+
+	return {
+		url: server.url,
+		waitForClose: server.waitForClose,
+		stop: server.stop,
+	};
 }
 
 export function shouldUseLocalPrCheckout(options: { useLocal?: boolean }): boolean {

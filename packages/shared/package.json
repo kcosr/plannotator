@@ -4,6 +4,7 @@
   "private": true,
   "exports": {
     "./agents": "./agents.ts",
+    "./atlas": "./atlas.ts",
     "./annotatable": "./annotatable.ts",
     "./compress": "./compress.ts",
     "./crypto": "./crypto.ts",

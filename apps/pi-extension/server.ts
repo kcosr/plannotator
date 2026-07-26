@@ -26,6 +26,10 @@ export {
 	startReviewServer,
 } from "./server/serverReview.ts";
 export {
+	type ExploreServerResult,
+	startExploreServer,
+} from "./server/serverExplore.ts";
+export {
 	canStageFiles,
 	detectManagedVcs,
 	detectRemoteDefaultCompareTarget,
