@@ -56,6 +56,7 @@ interface SourceNavigation {
   line?: number;
   column?: number;
   symbol?: string;
+  selection?: 'line' | 'symbol';
 }
 
 function descendants(node: AtlasNode, byId: Map<string, AtlasNode>): Set<string> {
@@ -612,6 +613,7 @@ export default function AtlasApp() {
                     line: symbol.line,
                     column: symbol.column,
                     symbol: symbol.name,
+                    selection: 'symbol',
                   })}
                 />
               </div>
@@ -624,6 +626,7 @@ export default function AtlasApp() {
                 targetLine={currentSourceTarget?.path === selectedFile.path ? currentSourceTarget.line : undefined}
                 targetColumn={currentSourceTarget?.path === selectedFile.path ? currentSourceTarget.column : undefined}
                 targetSymbol={currentSourceTarget?.path === selectedFile.path ? currentSourceTarget.symbol : undefined}
+                targetSelection={currentSourceTarget?.path === selectedFile.path ? currentSourceTarget.selection : undefined}
                 onNavigateFile={openSource}
               />
             )}
