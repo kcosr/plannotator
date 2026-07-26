@@ -10,8 +10,24 @@
 // Context — what the AI session knows about
 // ---------------------------------------------------------------------------
 
-import type { AIContext, AIContextMode, PlanContext, CodeReviewContext, AnnotateContext, ParentSession } from '@plannotator/core/ai-context';
-export type { AIContext, AIContextMode, PlanContext, CodeReviewContext, AnnotateContext, ParentSession };
+import type {
+  AIContext,
+  AIContextMode,
+  PlanContext,
+  CodeReviewContext,
+  AnnotateContext,
+  CodebaseAtlasContext,
+  ParentSession,
+} from '@plannotator/core/ai-context';
+export type {
+  AIContext,
+  AIContextMode,
+  PlanContext,
+  CodeReviewContext,
+  AnnotateContext,
+  CodebaseAtlasContext,
+  ParentSession,
+};
 
 // ---------------------------------------------------------------------------
 // Messages — what streams back from the AI

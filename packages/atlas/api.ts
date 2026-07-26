@@ -1,4 +1,5 @@
 import type {
+  AtlasFeedback,
   AtlasSnapshot,
   CallHierarchyResponse,
   ReferenceResponse,
@@ -74,4 +75,12 @@ export function refreshAtlas() {
 
 export function closeAtlas() {
   return request<{ ok: boolean }>('/api/atlas/close', { method: 'POST' });
+}
+
+export function submitAtlasFeedback(feedback: AtlasFeedback) {
+  return request<AtlasFeedback>('/api/atlas/feedback', {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify(feedback),
+  });
 }

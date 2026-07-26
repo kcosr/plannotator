@@ -64,11 +64,13 @@ export function buildDefaultPrompt(params: AskAIParams): string {
       const lineRef = params.lineStart === params.lineEnd
         ? `line ${params.lineStart}`
         : `lines ${params.lineStart}-${params.lineEnd}`;
-      const sideLabel = params.side === 'new' ? 'new (added)' : 'old (removed)';
+      const sideLabel = params.side
+        ? ` (${params.side === 'new' ? 'new (added)' : 'old (removed)'} side)`
+        : '';
       const codeBlock = params.selectedCode
         ? `\n\`\`\`\n${params.selectedCode}\n\`\`\`\n`
         : '';
-      return `Re: ${params.filePath}, ${lineRef} (${sideLabel} side)${codeBlock}\n${params.prompt}`;
+      return `Re: ${params.filePath}, ${lineRef}${sideLabel}${codeBlock}\n${params.prompt}`;
     }
 
     if (params.filePath) {

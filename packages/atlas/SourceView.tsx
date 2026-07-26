@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { File } from '@pierre/diffs/react';
-import type { LineEventBaseProps, SelectedLineRange, TokenEventBase } from '@pierre/diffs';
+import type { LineAnnotation, LineEventBaseProps, SelectedLineRange, TokenEventBase } from '@pierre/diffs';
 import {
   ArrowLeft,
   ArrowRight,
@@ -12,7 +12,12 @@ import {
   Copy,
   FileCode2,
   LocateFixed,
+  MessageSquare,
+  Pencil,
   Search,
+  Sparkles,
+  Trash2,
+  X,
 } from 'lucide-react';
 import { fetchCallHierarchy, fetchReferences, fetchSource } from './api';
 import { callLocationKey, filterCallTargets } from './callHierarchy';
@@ -20,6 +25,8 @@ import { lineMatchesFilter, symbolMatchesFilter } from './codeFilter';
 import { isInspectableSymbol, referencePositionFromToken } from './referencePosition';
 import type {
   AtlasAnalyzers,
+  AtlasAnnotation,
+  AtlasAnnotationDraft,
   AtlasNode,
   AtlasSymbol,
   CallHierarchyLocation,
@@ -49,6 +56,12 @@ interface SourceViewProps {
   targetSelection?: 'line' | 'symbol';
   codeFilter: CodeFilter;
   onNavigateFile: (target: NavigationTarget) => void;
+  annotations: AtlasAnnotation[];
+  aiAvailable: boolean;
+  onAddAnnotation: (draft: AtlasAnnotationDraft) => void;
+  onUpdateAnnotation: (id: string, text: string) => void;
+  onDeleteAnnotation: (id: string) => void;
+  onAskAI: (question: string, draft: AtlasAnnotationDraft) => void;
 }
 
 const PIERRE_SOURCE_CSS = `
@@ -78,6 +91,10 @@ const PIERRE_SOURCE_CSS = `
     background: color-mix(in oklab, #facc15 38%, transparent) !important;
     outline: 1px solid color-mix(in oklab, #facc15 78%, transparent);
     border-radius: 2px;
+  }
+  [data-line][data-atlas-annotated] {
+    box-shadow: inset 3px 0 color-mix(in oklab, #22c55e 72%, transparent);
+    background: color-mix(in oklab, #22c55e 8%, transparent);
   }
 `;
 
@@ -244,6 +261,12 @@ export function SourceView({
   targetSelection,
   codeFilter,
   onNavigateFile,
+  annotations,
+  aiAvailable,
+  onAddAnnotation,
+  onUpdateAnnotation,
+  onDeleteAnnotation,
+  onAskAI,
 }: SourceViewProps) {
   const [source, setSource] = useState<SourceFile | null>(null);
   const [error, setError] = useState('');
@@ -266,12 +289,15 @@ export function SourceView({
   }>({ loading: false, result: null });
   const [copied, setCopied] = useState(false);
   const [navigationHighlight, setNavigationHighlight] = useState<NavigationHighlight | null>(null);
+  const [composeSelection, setComposeSelection] = useState<SelectedLineRange | null>(null);
+  const [composeText, setComposeText] = useState('');
+  const [editingAnnotationId, setEditingAnnotationId] = useState<string | null>(null);
   const hostRef = useRef<HTMLDivElement>(null);
   const symbolListRef = useRef<HTMLDivElement>(null);
   const referenceRequestRef = useRef<AbortController | null>(null);
   const suppressTokenLineClearRef = useRef(false);
-  const renderStateRef = useRef({ node, codeFilter, navigationHighlight });
-  renderStateRef.current = { node, codeFilter, navigationHighlight };
+  const renderStateRef = useRef({ node, codeFilter, navigationHighlight, annotations });
+  renderStateRef.current = { node, codeFilter, navigationHighlight, annotations };
 
   useEffect(() => {
     const controller = new AbortController();
@@ -287,6 +313,12 @@ export function SourceView({
         if (!controller.signal.aborted) setLoading(false);
       });
     return () => controller.abort();
+  }, [node.path]);
+
+  useEffect(() => {
+    setComposeSelection(null);
+    setComposeText('');
+    setEditingAnnotationId(null);
   }, [node.path]);
 
   const matches = useMemo(() => {
@@ -458,6 +490,53 @@ export function SourceView({
     if (props.lineNumber) setNavigationHighlight(null);
   }, []);
 
+  const closeComposer = useCallback(() => {
+    setComposeSelection(null);
+    setComposeText('');
+    setEditingAnnotationId(null);
+  }, []);
+
+  const annotationDraft = useCallback((): AtlasAnnotationDraft | null => {
+    if (!source || !composeSelection) return null;
+    const lineStart = Math.min(composeSelection.start, composeSelection.end);
+    const lineEnd = Math.max(composeSelection.start, composeSelection.end);
+    return {
+      filePath: node.path,
+      lineStart,
+      lineEnd,
+      text: composeText.trim(),
+      selectedCode: source.content.split(/\r\n|\r|\n/).slice(lineStart - 1, lineEnd).join('\n'),
+    };
+  }, [composeSelection, composeText, node.path, source]);
+
+  const saveAnnotation = useCallback(() => {
+    const draft = annotationDraft();
+    if (!draft?.text) return;
+    if (editingAnnotationId) onUpdateAnnotation(editingAnnotationId, draft.text);
+    else onAddAnnotation(draft);
+    closeComposer();
+  }, [
+    annotationDraft,
+    closeComposer,
+    editingAnnotationId,
+    onAddAnnotation,
+    onUpdateAnnotation,
+  ]);
+
+  const askAboutSelection = useCallback(() => {
+    const draft = annotationDraft();
+    if (!draft?.text || !aiAvailable) return;
+    onAskAI(draft.text, draft);
+    closeComposer();
+  }, [aiAvailable, annotationDraft, closeComposer, onAskAI]);
+
+  const editAnnotation = useCallback((annotation: AtlasAnnotation) => {
+    setEditingAnnotationId(annotation.id);
+    setComposeSelection({ start: annotation.lineStart, end: annotation.lineEnd });
+    setComposeText(annotation.text);
+    scrollToLine(annotation.lineStart);
+  }, [scrollToLine]);
+
   const applySourceDecorations = useCallback((container: HTMLElement) => {
     const shadowRoot = container.shadowRoot;
     const lines = shadowRoot?.querySelectorAll<HTMLElement>('[data-line]');
@@ -467,6 +546,12 @@ export function SourceView({
       const line = Number(element.dataset.line);
       if (!Number.isInteger(line)) continue;
       element.toggleAttribute('data-atlas-filtered-out', !lineMatchesFilter(current.node, line, current.codeFilter));
+      element.toggleAttribute(
+        'data-atlas-annotated',
+        current.annotations.some(
+          (annotation) => line >= annotation.lineStart && line <= annotation.lineEnd,
+        ),
+      );
     }
     for (const element of shadowRoot.querySelectorAll<HTMLElement>('[data-char]')) {
       element.toggleAttribute('data-atlas-inspectable', isInspectableSymbol(element.textContent));
@@ -490,7 +575,37 @@ export function SourceView({
   useEffect(() => {
     const container = hostRef.current?.querySelector('diffs-container') as HTMLElement | null;
     if (container) applySourceDecorations(container);
-  }, [node, codeFilter, source, navigationHighlight, applySourceDecorations]);
+  }, [node, codeFilter, source, navigationHighlight, annotations, applySourceDecorations]);
+
+  const lineAnnotations = useMemo<LineAnnotation<AtlasAnnotation>[]>(
+    () => annotations.map((annotation) => ({
+      lineNumber: annotation.lineEnd,
+      metadata: annotation,
+    })),
+    [annotations],
+  );
+
+  const renderAnnotation = useCallback(
+    (lineAnnotation: LineAnnotation<AtlasAnnotation>) => {
+      const annotation = lineAnnotation.metadata;
+      return (
+        <div className="atlas-inline-annotation">
+          <div>
+            <MessageSquare size={13} />
+            <strong>Lines {annotation.lineStart}-{annotation.lineEnd}</strong>
+            <span>{annotation.text}</span>
+          </div>
+          <button type="button" onClick={() => editAnnotation(annotation)} title="Edit annotation">
+            <Pencil size={13} />
+          </button>
+          <button type="button" onClick={() => onDeleteAnnotation(annotation.id)} title="Delete annotation">
+            <Trash2 size={13} />
+          </button>
+        </div>
+      );
+    },
+    [editAnnotation, onDeleteAnnotation],
+  );
 
   const pierreOptions = useMemo(() => ({
     themeType: 'system' as const,
@@ -499,6 +614,12 @@ export function SourceView({
     enableLineSelection: true,
     lineHoverHighlight: 'line' as const,
     onLineClick,
+    onLineSelectionEnd: (range: SelectedLineRange | null) => {
+      if (!range) return;
+      setEditingAnnotationId(null);
+      setComposeText('');
+      setComposeSelection(range);
+    },
     onTokenClick,
     onPostRender: applySourceDecorations,
     unsafeCSS: PIERRE_SOURCE_CSS,
@@ -617,10 +738,54 @@ export function SourceView({
             <File
               key={node.path}
               file={pierreFile}
-              selectedLines={navigationHighlight?.range ?? null}
+              selectedLines={composeSelection ?? navigationHighlight?.range ?? null}
+              lineAnnotations={lineAnnotations}
+              renderAnnotation={renderAnnotation}
               className="atlas-pierre-file"
               options={pierreOptions}
             />
+          )}
+          {composeSelection && (
+            <div className="atlas-source-compose">
+              <div className="atlas-source-compose-heading">
+                <span>
+                  {editingAnnotationId ? 'Edit comment' : 'Selected'} · lines{' '}
+                  {Math.min(composeSelection.start, composeSelection.end)}-
+                  {Math.max(composeSelection.start, composeSelection.end)}
+                </span>
+                <button type="button" onClick={closeComposer} title="Cancel"><X size={14} /></button>
+              </div>
+              <textarea
+                autoFocus
+                rows={2}
+                value={composeText}
+                onChange={(event) => setComposeText(event.target.value)}
+                placeholder={editingAnnotationId ? 'Update comment' : 'Comment or ask about this selection'}
+                onKeyDown={(event) => {
+                  if (event.key === 'Enter' && (event.metaKey || event.ctrlKey)) {
+                    event.preventDefault();
+                    saveAnnotation();
+                  }
+                }}
+              />
+              <div className="atlas-source-compose-actions">
+                <button type="button" disabled={!composeText.trim()} onClick={saveAnnotation}>
+                  <MessageSquare size={13} />
+                  {editingAnnotationId ? 'Update' : 'Comment'}
+                </button>
+                {!editingAnnotationId && (
+                  <button
+                    type="button"
+                    disabled={!aiAvailable || !composeText.trim()}
+                    onClick={askAboutSelection}
+                    title={aiAvailable ? 'Ask AI about this selection' : 'No AI provider is available'}
+                  >
+                    <Sparkles size={13} />
+                    Ask AI
+                  </button>
+                )}
+              </div>
+            </div>
           )}
         </div>
       </div>

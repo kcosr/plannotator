@@ -522,7 +522,11 @@ if (args[0] === "sessions") {
     label: `explore-${project}`,
   });
 
+  const feedback = await server.waitForFeedback();
   await server.waitForClose();
+  if (feedback?.markdown) {
+    process.stdout.write(`${feedback.markdown}\n`);
+  }
   await Bun.sleep(250);
   process.removeListener("exit", stopOnExit);
   server.stop();

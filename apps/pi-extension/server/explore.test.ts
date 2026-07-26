@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, test } from "bun:test";
+import { afterEach, beforeEach, describe, expect, test } from "bun:test";
 import { mkdirSync, mkdtempSync, rmSync, symlinkSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -7,8 +7,13 @@ import { startExploreServer, type ExploreServerResult } from "./serverExplore.ts
 
 const originalPort = process.env.PLANNOTATOR_PORT;
 const originalRemote = process.env.PLANNOTATOR_REMOTE;
+const originalAI = process.env.PLANNOTATOR_AI;
 const activeServers = new Set<ExploreServerResult>();
 const temporaryDirectories: string[] = [];
+
+beforeEach(() => {
+	process.env.PLANNOTATOR_AI = "disabled";
+});
 
 afterEach(() => {
 	for (const server of activeServers) server.stop();
@@ -20,6 +25,8 @@ afterEach(() => {
 	else process.env.PLANNOTATOR_PORT = originalPort;
 	if (originalRemote === undefined) delete process.env.PLANNOTATOR_REMOTE;
 	else process.env.PLANNOTATOR_REMOTE = originalRemote;
+	if (originalAI === undefined) delete process.env.PLANNOTATOR_AI;
+	else process.env.PLANNOTATOR_AI = originalAI;
 });
 
 function createFixture(): { root: string; outsideFile: string } {
@@ -118,6 +125,7 @@ describe("Pi Codebase Atlas server", () => {
 		const closeRequest = fetch(`${server.url}/api/atlas/close`, { method: "POST" });
 		await expect(closeRequest.then((response) => response.json())).resolves.toEqual({ ok: true });
 		await expect(server.waitForClose()).resolves.toBeUndefined();
+		await expect(server.waitForFeedback()).resolves.toBeNull();
 	});
 
 	test("rejects paths outside the repository and unknown API routes", async () => {
@@ -157,6 +165,24 @@ describe("Pi Codebase Atlas server", () => {
 			error: "API endpoint not found: /api/atlas/not-real",
 		});
 
+		const capabilities = await fetch(`${server.url}/api/ai/capabilities`);
+		expect(capabilities.status).toBe(200);
+		expect(await capabilities.json()).toEqual({ available: false, providers: [] });
+
+		const unavailableSession = await fetch(`${server.url}/api/ai/session`, {
+			method: "POST",
+		});
+		expect(unavailableSession.status).toBe(503);
+		expect(await unavailableSession.json()).toEqual({
+			error: "AI backend not available",
+		});
+
+		const missingAI = await fetch(`${server.url}/api/ai/not-real`);
+		expect(missingAI.status).toBe(404);
+		expect(await missingAI.json()).toEqual({
+			error: "API endpoint not found: /api/ai/not-real",
+		});
+
 		const refresh = await fetch(`${server.url}/api/atlas/refresh`, { method: "POST" });
 		expect(refresh.status).toBe(202);
 		expect(await refresh.json()).toEqual({ status: "indexing" });
@@ -175,5 +201,66 @@ describe("Pi Codebase Atlas server", () => {
 		const closePromise = server.waitForClose();
 		server.stop();
 		await expect(closePromise).resolves.toBeUndefined();
+		await expect(server.waitForFeedback()).resolves.toBeNull();
+	});
+
+	test("validates and returns submitted Atlas feedback", async () => {
+		process.env.PLANNOTATOR_PORT = "0";
+		process.env.PLANNOTATOR_REMOTE = "0";
+		const { root } = createFixture();
+		const server = await startExploreServer({
+			rootPath: root,
+			htmlContent: "<!doctype html>",
+		});
+		activeServers.add(server);
+
+		const invalid = await fetch(`${server.url}/api/atlas/feedback`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				annotations: [{
+					id: "outside",
+					filePath: "../outside.ts",
+					lineStart: 1,
+					lineEnd: 1,
+					text: "Not contained",
+					createdAt: "2026-07-26T12:00:00.000Z",
+					snapshotGeneratedAt: "2026-07-26T11:59:00.000Z",
+				}],
+				markdown: "Invalid",
+			}),
+		});
+		expect(invalid.status).toBe(400);
+
+		const feedback = {
+			annotations: [{
+				id: "annotation-1",
+				filePath: "src/main.ts",
+				lineStart: 2,
+				lineEnd: 4,
+				text: "Review this function",
+				selectedCode: "export function run()",
+				createdAt: "2026-07-26T12:00:00.000Z",
+				snapshotGeneratedAt: "2026-07-26T11:59:00.000Z",
+			}],
+			markdown: "## Atlas feedback\n\nReview this function.",
+		};
+		const response = await fetch(`${server.url}/api/atlas/feedback`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(feedback),
+		});
+
+		expect(response.status).toBe(200);
+		expect(await response.json()).toEqual(feedback);
+		await expect(server.waitForFeedback()).resolves.toEqual(feedback);
+		await expect(server.waitForClose()).resolves.toBeUndefined();
+
+		const duplicate = await fetch(`${server.url}/api/atlas/feedback`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify(feedback),
+		});
+		expect(duplicate.status).toBe(409);
 	});
 });

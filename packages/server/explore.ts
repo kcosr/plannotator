@@ -19,7 +19,10 @@ import {
   AtlasSemanticSession,
   probeAtlasSemanticCapabilities,
 } from "@plannotator/shared/atlas-semantic";
+import { isAIEndpointPath, type AIEndpoints } from "@plannotator/ai";
+import { resolveAIEnabled } from "./config";
 import { isWithinDirectory } from "@plannotator/shared/html-assets-node";
+import { AI_QUERY_ENDPOINT, createAIRuntime, type AIRuntime } from "./ai-runtime";
 import {
   getServerHostname,
   isRemoteSession,
@@ -42,7 +45,24 @@ export interface ExploreServerResult {
   url: string;
   isRemote: boolean;
   waitForClose: () => Promise<void>;
+  waitForFeedback: () => Promise<AtlasFeedbackResult | null>;
   stop: () => void;
+}
+
+export interface AtlasFeedbackAnnotation {
+  id: string;
+  filePath: string;
+  lineStart: number;
+  lineEnd: number;
+  text: string;
+  selectedCode?: string;
+  createdAt: string;
+  snapshotGeneratedAt: string;
+}
+
+export interface AtlasFeedbackResult {
+  annotations: AtlasFeedbackAnnotation[];
+  markdown: string;
 }
 
 function jsonError(error: string, status: number): Response {
@@ -70,6 +90,111 @@ function normalizeSourcePath(rootPath: string, requestedPath: string): string | 
   }
 }
 
+function hasExactKeys(
+  value: Record<string, unknown>,
+  required: readonly string[],
+  optional: readonly string[] = [],
+): boolean {
+  const keys = Object.keys(value);
+  return required.every((key) => key in value)
+    && keys.every((key) => required.includes(key) || optional.includes(key));
+}
+
+async function parseAtlasFeedback(
+  req: Request,
+  rootPath: string,
+): Promise<AtlasFeedbackResult | string> {
+  let body: unknown;
+  try {
+    body = await req.json();
+  } catch {
+    return "Request body must be valid JSON";
+  }
+  if (
+    !body
+    || typeof body !== "object"
+    || Array.isArray(body)
+    || !hasExactKeys(body as Record<string, unknown>, ["annotations", "markdown"])
+  ) {
+    return "Request body must contain exactly annotations and markdown";
+  }
+
+  const { annotations, markdown } = body as Record<string, unknown>;
+  if (!Array.isArray(annotations) || typeof markdown !== "string") {
+    return "Annotations must be an array and markdown must be a string";
+  }
+
+  const parsed: AtlasFeedbackAnnotation[] = [];
+  const ids = new Set<string>();
+  for (const value of annotations) {
+    if (
+      !value
+      || typeof value !== "object"
+      || Array.isArray(value)
+      || !hasExactKeys(
+        value as Record<string, unknown>,
+        ["id", "filePath", "lineStart", "lineEnd", "text", "createdAt", "snapshotGeneratedAt"],
+        ["selectedCode"],
+      )
+    ) {
+      return "Each annotation must contain the expected Atlas annotation fields";
+    }
+    const annotation = value as Record<string, unknown>;
+    const {
+      id,
+      filePath,
+      lineStart,
+      lineEnd,
+      text,
+      selectedCode,
+      createdAt,
+      snapshotGeneratedAt,
+    } = annotation;
+    if (
+      typeof id !== "string"
+      || id.length === 0
+      || ids.has(id)
+      || typeof filePath !== "string"
+      || typeof text !== "string"
+      || typeof createdAt !== "string"
+      || createdAt.length === 0
+      || typeof snapshotGeneratedAt !== "string"
+      || snapshotGeneratedAt.length === 0
+      || (selectedCode !== undefined && typeof selectedCode !== "string")
+      || !Number.isInteger(lineStart)
+      || !Number.isInteger(lineEnd)
+      || (lineStart as number) < 1
+      || (lineEnd as number) < (lineStart as number)
+    ) {
+      return "Annotation fields are invalid";
+    }
+
+    const sourcePath = normalizeSourcePath(rootPath, filePath);
+    if (!sourcePath || sourcePath !== filePath.replace(/\\/g, "/")) {
+      return `Annotation path is outside the repository or invalid: ${filePath}`;
+    }
+    const source = await readAtlasSource(rootPath, sourcePath);
+    const lineCount = source.content.split(/\r?\n/).length;
+    if ((lineEnd as number) > lineCount) {
+      return `Annotation line range is outside the source file: ${filePath}`;
+    }
+
+    ids.add(id);
+    parsed.push({
+      id,
+      filePath,
+      lineStart: lineStart as number,
+      lineEnd: lineEnd as number,
+      text,
+      ...(selectedCode !== undefined && { selectedCode }),
+      createdAt,
+      snapshotGeneratedAt,
+    });
+  }
+
+  return { annotations: parsed, markdown };
+}
+
 /**
  * Start a local repository explorer.
  */
@@ -87,16 +212,47 @@ export async function startExploreServer(
   let indexingError: string | undefined;
   let activeBuild: Promise<void> | undefined;
   const semanticSession = new AtlasSemanticSession();
+  let aiRuntimePromise: Promise<AIRuntime | null> | undefined;
+  const getAIRuntime = (): Promise<AIRuntime | null> => {
+    if (!aiRuntimePromise) {
+      aiRuntimePromise = resolveAIEnabled()
+        ? createAIRuntime({ cwd: rootPath }).catch(() => null)
+        : Promise.resolve(null);
+    }
+    return aiRuntimePromise;
+  };
   let stopped = false;
   let closeResolved = false;
+  let feedbackResolved = false;
   let resolveClose!: () => void;
+  let resolveFeedback!: (feedback: AtlasFeedbackResult | null) => void;
   const closePromise = new Promise<void>((resolvePromise) => {
     resolveClose = resolvePromise;
+  });
+  const feedbackPromise = new Promise<AtlasFeedbackResult | null>((resolvePromise) => {
+    resolveFeedback = resolvePromise;
   });
   const resolveCloseOnce = () => {
     if (closeResolved) return;
     closeResolved = true;
     resolveClose();
+  };
+  const resolveFeedbackOnce = (feedback: AtlasFeedbackResult | null) => {
+    if (feedbackResolved) return false;
+    feedbackResolved = true;
+    resolveFeedback(feedback);
+    resolveCloseOnce();
+    return true;
+  };
+  let disposePromise: Promise<void> | undefined;
+  const disposeRuntimes = (): Promise<void> => {
+    if (!disposePromise) {
+      disposePromise = Promise.all([
+        semanticSession.dispose(),
+        aiRuntimePromise?.then((runtime) => runtime?.dispose()),
+      ]).then(() => {});
+    }
+    return disposePromise;
   };
 
   const beginIndexing = (): Promise<void> => {
@@ -148,7 +304,8 @@ export async function startExploreServer(
     Bun.serve({
       hostname: getServerHostname(),
       port,
-      async fetch(req) {
+      idleTimeout: 0,
+      async fetch(req, bunServer) {
         const url = new URL(req.url);
         const method = req.method.toUpperCase();
 
@@ -262,10 +419,38 @@ export async function startExploreServer(
           return Response.json({ status: "indexing" }, { status: 202 });
         }
 
+        if (method === "POST" && url.pathname === "/api/atlas/feedback") {
+          if (feedbackResolved) return jsonError("Atlas session is already closed", 409);
+          const feedback = await parseAtlasFeedback(req, rootPath);
+          if (typeof feedback === "string") return jsonError(feedback, 400);
+          if (!resolveFeedbackOnce(feedback)) {
+            return jsonError("Atlas session is already closed", 409);
+          }
+          await disposeRuntimes();
+          return Response.json(feedback);
+        }
+
         if (method === "POST" && url.pathname === "/api/atlas/close") {
-          await semanticSession.dispose();
-          resolveCloseOnce();
+          resolveFeedbackOnce(null);
+          await disposeRuntimes();
           return Response.json({ ok: true });
+        }
+
+        if (url.pathname.startsWith("/api/ai/")) {
+          if (!isAIEndpointPath(url.pathname)) {
+            return jsonError(`API endpoint not found: ${url.pathname}`, 404);
+          }
+          const aiRuntime = await getAIRuntime();
+          if (!aiRuntime) {
+            if (url.pathname === "/api/ai/capabilities" && method === "GET") {
+              return Response.json({ available: false, providers: [] });
+            }
+            return jsonError("AI backend not available", 503);
+          }
+          const handler = aiRuntime.endpoints[url.pathname as keyof AIEndpoints];
+          if (!handler) return jsonError(`API endpoint not found: ${url.pathname}`, 404);
+          if (url.pathname === AI_QUERY_ENDPOINT) bunServer.timeout(req, 0);
+          return handler(req);
         }
 
         if (url.pathname === "/api" || url.pathname.startsWith("/api/")) {
@@ -295,6 +480,8 @@ export async function startExploreServer(
     await options.onReady?.(url, isRemote, port);
   } catch (error) {
     stopped = true;
+    resolveFeedbackOnce(null);
+    await disposeRuntimes();
     server.stop();
     throw error;
   }
@@ -304,11 +491,12 @@ export async function startExploreServer(
     url,
     isRemote,
     waitForClose: () => closePromise,
+    waitForFeedback: () => feedbackPromise,
     stop: () => {
       if (stopped) return;
       stopped = true;
-      resolveCloseOnce();
-      void semanticSession.dispose();
+      resolveFeedbackOnce(null);
+      void disposeRuntimes();
       server.stop();
     },
   };

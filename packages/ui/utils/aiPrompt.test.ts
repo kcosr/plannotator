@@ -35,6 +35,20 @@ describe("buildReviewContextPreamble", () => {
       "git diff main..HEAD",
     );
   });
+
+  test("source line context does not invent a diff side", () => {
+    const prompt = buildDefaultPrompt({
+      prompt: "What does this do?",
+      filePath: "src/main.ts",
+      lineStart: 7,
+      lineEnd: 9,
+      selectedCode: "run();",
+    });
+
+    expect(prompt).toContain("Re: src/main.ts, lines 7-9");
+    expect(prompt).not.toContain("old (removed)");
+    expect(prompt).not.toContain("new (added)");
+  });
 });
 
 describe("buildDefaultPrompt with contextPreamble", () => {

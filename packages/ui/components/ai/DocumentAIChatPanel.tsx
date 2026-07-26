@@ -19,6 +19,8 @@ interface DocumentAIChatPanelProps {
   aiProviders?: AIProviderOption[];
   aiConfig?: { providerId: string | null; model: string | null; reasoningEffort?: string | null };
   onAIConfigChange?: (config: { providerId?: string | null; model?: string | null; reasoningEffort?: string | null }) => void;
+  emptyPrompt?: React.ReactNode;
+  inputPlaceholder?: string;
 }
 
 function truncate(text: string, max = 180): string {
@@ -64,6 +66,8 @@ export const DocumentAIChatPanel: React.FC<DocumentAIChatPanelProps> = ({
   aiProviders = [],
   aiConfig,
   onAIConfigChange,
+  emptyPrompt,
+  inputPlaceholder = 'Ask about this document...',
 }) => {
   const scrollRef = useRef<HTMLDivElement>(null);
   const [generalInput, setGeneralInput] = useState('');
@@ -93,11 +97,11 @@ export const DocumentAIChatPanel: React.FC<DocumentAIChatPanelProps> = ({
                 <SparklesIcon className="w-5 h-5" />
               </div>
               <p className="text-xs">
-                {onAskGeneral ? (
+                {emptyPrompt ?? (onAskGeneral ? (
                   <>Select text and click <strong>Ask AI</strong>, or ask a general question below.</>
                 ) : (
                   <>Select text and click <strong>Ask AI</strong>.</>
-                )}
+                ))}
               </p>
             </div>
           )}
@@ -146,6 +150,7 @@ export const DocumentAIChatPanel: React.FC<DocumentAIChatPanelProps> = ({
           disabled={isStreaming}
           isStreaming={isStreaming}
           onStop={onStop}
+          placeholder={inputPlaceholder}
         />
       )}
     </div>
@@ -254,7 +259,8 @@ const GeneralInput: React.FC<{
   disabled?: boolean;
   isStreaming?: boolean;
   onStop?: () => void;
-}> = ({ value, onChange, onSubmit, disabled, isStreaming, onStop }) => {
+  placeholder?: string;
+}> = ({ value, onChange, onSubmit, disabled, isStreaming, onStop, placeholder }) => {
   const textareaRef = useRef<HTMLTextAreaElement>(null);
 
   useEffect(() => {
@@ -271,7 +277,7 @@ const GeneralInput: React.FC<{
           ref={textareaRef}
           value={value}
           onChange={(event) => onChange(event.target.value)}
-          placeholder="Ask about this document..."
+          placeholder={placeholder}
           rows={1}
           className="flex-1 px-2.5 py-1.5 bg-muted rounded-md text-xs text-foreground placeholder:text-muted-foreground/50 resize-none focus:outline-none focus:ring-1 focus:ring-primary/50 leading-relaxed"
           style={{ maxHeight: 120 }}

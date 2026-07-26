@@ -18,6 +18,7 @@ import {
 	startExploreServer,
 	startPlanReviewServer,
 	startReviewServer,
+	type AtlasFeedbackResult,
 	type DiffType,
 	type VcsSelection,
 	unstageFile,
@@ -73,6 +74,7 @@ export interface BrowserDecisionSession<T> {
 export interface BrowserExploreSession {
 	url: string;
 	waitForClose: () => Promise<void>;
+	waitForFeedback: () => Promise<AtlasFeedbackResult | null>;
 	stop: () => void;
 }
 
@@ -269,6 +271,7 @@ export async function startCodebaseExploreBrowserSession(
 	return {
 		url: server.url,
 		waitForClose: server.waitForClose,
+		waitForFeedback: server.waitForFeedback,
 		stop: server.stop,
 	};
 }

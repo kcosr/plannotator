@@ -1,5 +1,9 @@
 @import "@fontsource-variable/inter";
 @import "@fontsource-variable/geist-mono";
+@import "tailwindcss";
+@source "../ui/components/ai/*.tsx";
+@source "../ui/components/OverlayScrollArea.tsx";
+@source "../ui/components/SparklesIcon.tsx";
 @import "@plannotator/ui/theme";
 
 :root {
@@ -76,7 +80,24 @@ button { color: inherit; }
 }
 .atlas-icon-button:hover:not(:disabled) { background: var(--muted); border-color: var(--border); color: var(--foreground); }
 .atlas-icon-button:disabled { opacity: .3; cursor: default; }
+.atlas-icon-button.is-active {
+  color: var(--foreground);
+  background: color-mix(in oklab, var(--primary) 14%, var(--muted));
+  border-color: color-mix(in oklab, var(--primary) 48%, var(--border));
+}
 .atlas-close-button:hover { color: var(--destructive) !important; }
+.atlas-submit-button {
+  height: 29px; padding: 0 8px; display: inline-flex; align-items: center; gap: 5px;
+  border: 1px solid color-mix(in oklab, var(--primary) 60%, var(--border));
+  border-radius: 5px; background: var(--primary); color: var(--primary-foreground);
+  cursor: pointer; font-size: 10px; font-weight: 650;
+}
+.atlas-submit-button:disabled { opacity: .38; cursor: default; }
+.atlas-submit-button small {
+  min-width: 15px; height: 15px; display: grid; place-items: center; padding: 0 3px;
+  border-radius: 3px; background: color-mix(in oklab, var(--primary-foreground) 16%, transparent);
+  font: 8px var(--font-mono);
+}
 
 .atlas-shell {
   min-height: 0; min-width: 0; display: grid;
@@ -328,6 +349,54 @@ button { color: inherit; }
 .atlas-pierre-file, .atlas-source-code > div, .atlas-source-code diffs-container { height: 100% !important; }
 diffs-container { --diffs-dark-bg: var(--background); --diffs-light-bg: var(--background); --diffs-dark: var(--foreground); --diffs-light: var(--foreground); }
 .atlas-source-inspector { min-width: 0; min-height: 0; overflow: auto; background: var(--sidebar); }
+.atlas-source-compose {
+  position: absolute; z-index: 30; left: 50%; bottom: 14px; width: min(520px, calc(100% - 28px));
+  transform: translateX(-50%); padding: 8px; border: 1px solid var(--border);
+  border-radius: 6px; background: var(--card); box-shadow: 0 10px 35px rgb(0 0 0 / .3);
+}
+.atlas-source-compose-heading {
+  height: 20px; display: flex; align-items: flex-start; justify-content: space-between;
+  color: var(--muted-foreground); font: 9px var(--font-mono);
+}
+.atlas-source-compose-heading button,
+.atlas-inline-annotation button,
+.atlas-ai-drawer-header button,
+.atlas-submit-error button {
+  width: 24px; height: 24px; padding: 0; display: grid; place-items: center;
+  border: 0; border-radius: 4px; background: transparent; color: var(--muted-foreground);
+  cursor: pointer;
+}
+.atlas-source-compose-heading button { margin-top: -5px; }
+.atlas-source-compose-heading button:hover,
+.atlas-inline-annotation button:hover,
+.atlas-ai-drawer-header button:hover,
+.atlas-submit-error button:hover { color: var(--foreground); background: var(--muted); }
+.atlas-source-compose textarea {
+  width: 100%; min-height: 54px; max-height: 150px; resize: vertical; padding: 7px 8px;
+  border: 1px solid var(--border); border-radius: 5px; outline: 0;
+  background: var(--background); color: var(--foreground); font: 11px/1.45 var(--font-sans);
+}
+.atlas-source-compose textarea:focus { border-color: var(--ring); box-shadow: 0 0 0 1px var(--ring); }
+.atlas-source-compose-actions { margin-top: 6px; display: flex; justify-content: flex-end; gap: 5px; }
+.atlas-source-compose-actions button {
+  height: 27px; padding: 0 8px; display: inline-flex; align-items: center; gap: 5px;
+  border: 1px solid var(--border); border-radius: 5px; background: var(--background);
+  color: var(--foreground); cursor: pointer; font-size: 10px;
+}
+.atlas-source-compose-actions button:hover:not(:disabled) { background: var(--muted); }
+.atlas-source-compose-actions button:disabled { opacity: .35; cursor: default; }
+.atlas-inline-annotation {
+  min-height: 36px; display: grid; grid-template-columns: minmax(0, 1fr) 24px 24px;
+  align-items: center; gap: 3px; padding: 5px 8px; border-block: 1px solid var(--border);
+  background: color-mix(in oklab, #22c55e 8%, var(--background));
+}
+.atlas-inline-annotation > div {
+  min-width: 0; display: grid; grid-template-columns: 14px auto minmax(0, 1fr);
+  align-items: center; gap: 6px;
+}
+.atlas-inline-annotation svg { color: #22c55e; }
+.atlas-inline-annotation strong { color: var(--muted-foreground); font: 9px var(--font-mono); }
+.atlas-inline-annotation span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-size: 10px; }
 .atlas-inspector-header {
   height: 34px; display: flex; align-items: center; gap: 6px; padding: 0 10px;
   border-bottom: 1px solid var(--border); color: var(--muted-foreground); font-size: 10px; text-transform: uppercase; font-weight: 650;
@@ -445,11 +514,37 @@ diffs-container { --diffs-dark-bg: var(--background); --diffs-light-bg: var(--ba
   border-radius: 5px; background: var(--primary); color: var(--primary-foreground); cursor: pointer;
 }
 
+.atlas-ai-drawer {
+  position: fixed; z-index: 80; top: 49px; right: 0; bottom: 0; width: min(390px, 92vw);
+  display: flex; flex-direction: column; border-left: 1px solid var(--border);
+  background: var(--card); box-shadow: -12px 0 35px rgb(0 0 0 / .28);
+}
+.atlas-ai-drawer-header {
+  height: 39px; flex: 0 0 39px; padding: 0 8px 0 11px; display: flex; align-items: center; gap: 7px;
+  border-bottom: 1px solid var(--border);
+}
+.atlas-ai-drawer-header > svg { color: var(--primary); }
+.atlas-ai-drawer-header strong { flex: 1; font-size: 11px; }
+.atlas-ai-drawer-header span {
+  height: 21px; padding: 0 6px; display: flex; align-items: center; gap: 4px;
+  border-radius: 4px; background: var(--muted); color: var(--muted-foreground);
+  font: 9px var(--font-mono);
+}
+.atlas-submit-error {
+  position: fixed; z-index: 100; right: 12px; bottom: 12px; max-width: min(430px, calc(100vw - 24px));
+  min-height: 38px; padding: 6px 7px 6px 10px; display: flex; align-items: center; gap: 7px;
+  border: 1px solid color-mix(in oklab, var(--destructive) 50%, var(--border));
+  border-radius: 6px; background: var(--card); box-shadow: 0 8px 30px rgb(0 0 0 / .3);
+  color: var(--destructive); font-size: 10px;
+}
+.atlas-submit-error span { flex: 1; color: var(--foreground); }
+
 @media (max-width: 850px) {
   .atlas-header { grid-template-columns: minmax(120px, 1fr) auto; }
   .atlas-view-tabs { order: 3; grid-column: 1 / -1; height: 39px; justify-content: stretch; border-top: 1px solid var(--border); margin: 0 -10px 0 -14px; }
   .atlas-view-tabs button { flex: 1; min-width: 0; }
   .atlas-header-actions { grid-column: 2; grid-row: 1; }
+  .atlas-ai-drawer { top: 88px; }
   .atlas-app { grid-template-rows: 88px minmax(0, 1fr); }
   .atlas-shell { grid-template-columns: 205px minmax(0, 1fr); }
   .atlas-overview-layout.is-relationships { grid-template-columns: minmax(0, 1fr) 220px; }

@@ -12,15 +12,21 @@ import {
   FileCode2,
   GitBranch,
   LoaderCircle,
+  MessageSquare,
   Moon,
   PanelLeftClose,
   PanelLeftOpen,
   RefreshCw,
   Search,
+  Send,
+  Sparkles,
   Square,
   Sun,
   X,
 } from 'lucide-react';
+import { DocumentAIChatPanel } from '@plannotator/ui/components/ai/DocumentAIChatPanel';
+import { useAIChat } from '@plannotator/ui/hooks/useAIChat';
+import { useAIProviderConfig } from '@plannotator/ui/hooks/useAIProviderConfig';
 import { BlockMap } from './BlockMap';
 import {
   filteredBytes,
@@ -32,10 +38,19 @@ import {
 import { DirectoryTree } from './DirectoryTree';
 import { SourceView } from './SourceView';
 import { SymbolMap } from './SymbolMap';
-import { closeAtlas, fetchSnapshot, fetchStatus, refreshAtlas } from './api';
+import {
+  closeAtlas,
+  fetchSnapshot,
+  fetchStatus,
+  refreshAtlas,
+  submitAtlasFeedback,
+} from './api';
+import { formatAtlasAnnotationSummary, formatAtlasFeedback } from './feedback';
 import { formatBytes, formatNumber } from './format';
 import type {
   AtlasDependency,
+  AtlasAnnotation,
+  AtlasAnnotationDraft,
   AtlasNode,
   AtlasSnapshot,
   AtlasSymbol,
@@ -334,6 +349,18 @@ export default function AtlasApp() {
   const [dark, setDark] = useState(() => !window.matchMedia('(prefers-color-scheme: light)').matches);
   const [sourceHistory, setSourceHistory] = useState<SourceNavigation[]>([]);
   const [sourceHistoryIndex, setSourceHistoryIndex] = useState(-1);
+  const [annotations, setAnnotations] = useState<AtlasAnnotation[]>([]);
+  const [aiOpen, setAiOpen] = useState(false);
+  const [aiAvailable, setAiAvailable] = useState(false);
+  const [aiProviders, setAiProviders] = useState<Array<{
+    id: string;
+    name: string;
+    models?: Array<{ id: string; label: string; default?: boolean }>;
+  }>>([]);
+  const [aiDefaultProvider, setAiDefaultProvider] = useState<string | null>(null);
+  const [submitting, setSubmitting] = useState(false);
+  const [submitted, setSubmitted] = useState(false);
+  const [submitError, setSubmitError] = useState('');
 
   const nodes = snapshot?.nodes ?? [];
   const byId = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
@@ -351,11 +378,50 @@ export default function AtlasApp() {
       .filter((node) => node.kind === 'file' && node.language && nodeMatchesFilter(node, codeFilter))
       .map((node) => node.language),
   ).size;
+  const annotationSummary = useMemo(
+    () => formatAtlasAnnotationSummary(annotations),
+    [annotations],
+  );
+  const { aiConfig, applyConfigChange } = useAIProviderConfig({
+    providers: aiProviders,
+    defaultProvider: aiDefaultProvider,
+    available: aiAvailable,
+    origin: null,
+  });
+  const aiChat = useAIChat({
+    context: snapshot ? {
+      mode: 'codebase-atlas',
+      atlas: {
+        rootPath: snapshot.rootPath,
+        rootName: snapshot.rootName,
+        ...(annotationSummary && { annotations: annotationSummary }),
+      },
+    } : null,
+    providerId: aiConfig.providerId,
+    model: aiConfig.model,
+    reasoningEffort: aiConfig.reasoningEffort,
+    threadTitle: 'Codebase Atlas',
+  });
 
   useEffect(() => {
     document.documentElement.classList.toggle('light', !dark);
     document.documentElement.classList.add('theme-plannotator');
   }, [dark]);
+
+  useEffect(() => {
+    fetch('/api/ai/capabilities', { cache: 'no-store' })
+      .then((response) => response.ok ? response.json() : null)
+      .then((capabilities) => {
+        setAiAvailable(Boolean(capabilities?.available));
+        setAiProviders(capabilities?.providers ?? []);
+        setAiDefaultProvider(capabilities?.defaultProvider ?? null);
+      })
+      .catch(() => {
+        setAiAvailable(false);
+        setAiProviders([]);
+        setAiDefaultProvider(null);
+      });
+  }, []);
 
   useEffect(() => {
     if (!root) return;
@@ -398,6 +464,88 @@ export default function AtlasApp() {
     () => relationshipMap(nodes, snapshot?.dependencies ?? [], relationshipSelection),
     [nodes, snapshot?.dependencies, relationshipSelection],
   );
+
+  const addAnnotation = useCallback((draft: AtlasAnnotationDraft) => {
+    const timestamp = new Date().toISOString();
+    setAnnotations((current) => [...current, {
+      ...draft,
+      id: crypto.randomUUID(),
+      createdAt: timestamp,
+      snapshotGeneratedAt: snapshot?.generatedAt ?? timestamp,
+    }]);
+  }, [snapshot?.generatedAt]);
+
+  const updateAnnotation = useCallback((id: string, text: string) => {
+    setAnnotations((current) => current.map((annotation) =>
+      annotation.id === id ? { ...annotation, text } : annotation,
+    ));
+  }, []);
+
+  const deleteAnnotation = useCallback((id: string) => {
+    setAnnotations((current) => current.filter((annotation) => annotation.id !== id));
+  }, []);
+
+  const askGeneral = useCallback((question: string) => {
+    void aiChat.ask({
+      prompt: question,
+      ...(annotationSummary && { contextUpdate: `Current Atlas annotations:\n${annotationSummary}` }),
+    });
+  }, [aiChat.ask, annotationSummary]);
+
+  const askSelection = useCallback((question: string, draft: AtlasAnnotationDraft) => {
+    setAiOpen(true);
+    void aiChat.ask({
+      prompt: question,
+      filePath: draft.filePath,
+      lineStart: draft.lineStart,
+      lineEnd: draft.lineEnd,
+      selectedCode: draft.selectedCode,
+      scope: {
+        kind: 'selection',
+        label: `${draft.filePath}:${draft.lineStart}-${draft.lineEnd}`,
+        sourcePath: draft.filePath,
+        text: draft.selectedCode,
+      },
+      ...(annotationSummary && { contextUpdate: `Current Atlas annotations:\n${annotationSummary}` }),
+    });
+  }, [aiChat.ask, annotationSummary]);
+
+  const changeAIConfig = useCallback((config: {
+    providerId?: string | null;
+    model?: string | null;
+    reasoningEffort?: string | null;
+  }) => {
+    applyConfigChange(config);
+    aiChat.resetSession();
+  }, [aiChat.resetSession, applyConfigChange]);
+
+  const submitFeedback = useCallback(async () => {
+    if (annotations.length === 0 || submitting) return;
+    setSubmitting(true);
+    setSubmitError('');
+    const feedback = {
+      annotations,
+      markdown: formatAtlasFeedback(annotations),
+    };
+    try {
+      await submitAtlasFeedback(feedback);
+      setSubmitted(true);
+    } catch (reason) {
+      setSubmitError(reason instanceof Error ? reason.message : String(reason));
+    } finally {
+      setSubmitting(false);
+    }
+  }, [annotations, submitting]);
+
+  if (submitted) {
+    return (
+      <main className="atlas-state-screen" role="status">
+        <div className="atlas-state-mark"><CircleCheck size={25} /></div>
+        <strong>Feedback submitted</strong>
+        <span>{annotations.length} annotation{annotations.length === 1 ? '' : 's'} sent to the calling agent.</span>
+      </main>
+    );
+  }
 
   if (status === 'error') {
     return (
@@ -451,6 +599,24 @@ export default function AtlasApp() {
             <time dateTime={snapshot.generatedAt}>{formatIndexedAt(snapshot.generatedAt)}</time>
           </div>
           <button type="button" className="atlas-icon-button" title="Refresh index" onClick={() => void refresh()}><RefreshCw size={15} /></button>
+          <button
+            type="button"
+            className={`atlas-icon-button${aiOpen ? ' is-active' : ''}`}
+            title={aiAvailable ? 'Ask AI' : 'No AI provider is available'}
+            disabled={!aiAvailable}
+            onClick={() => setAiOpen((current) => !current)}
+          ><Sparkles size={15} /></button>
+          <button
+            type="button"
+            className="atlas-submit-button"
+            disabled={annotations.length === 0 || submitting}
+            onClick={() => void submitFeedback()}
+            title={annotations.length === 0 ? 'Add a source annotation first' : 'Submit annotations'}
+          >
+            {submitting ? <LoaderCircle size={14} className="atlas-spin" /> : <Send size={14} />}
+            <span>Submit</span>
+            {annotations.length > 0 && <small>{annotations.length}</small>}
+          </button>
           <button type="button" className="atlas-icon-button" title={dark ? 'Use light theme' : 'Use dark theme'} onClick={() => setDark((value) => !value)}>
             {dark ? <Sun size={15} /> : <Moon size={15} />}
           </button>
@@ -629,6 +795,12 @@ export default function AtlasApp() {
                 targetSymbol={currentSourceTarget?.path === selectedFile.path ? currentSourceTarget.symbol : undefined}
                 targetSelection={currentSourceTarget?.path === selectedFile.path ? currentSourceTarget.selection : undefined}
                 onNavigateFile={openSource}
+                annotations={annotations.filter((annotation) => annotation.filePath === selectedFile.path)}
+                aiAvailable={aiAvailable}
+                onAddAnnotation={addAnnotation}
+                onUpdateAnnotation={updateAnnotation}
+                onDeleteAnnotation={deleteAnnotation}
+                onAskAI={askSelection}
               />
             )}
             {(view === 'symbols' || view === 'source') && !selectedFile && (
@@ -637,6 +809,41 @@ export default function AtlasApp() {
           </div>
         </section>
       </div>
+      {aiOpen && (
+        <aside className="atlas-ai-drawer" aria-label="Ask AI">
+          <div className="atlas-ai-drawer-header">
+            <Sparkles size={15} />
+            <strong>Ask AI</strong>
+            {annotations.length > 0 && (
+              <span title="Current annotations"><MessageSquare size={12} />{annotations.length}</span>
+            )}
+            <button type="button" onClick={() => setAiOpen(false)} title="Close AI panel"><X size={15} /></button>
+          </div>
+          <DocumentAIChatPanel
+            messages={aiChat.messages}
+            isCreatingSession={aiChat.isCreatingSession}
+            isStreaming={aiChat.isStreaming}
+            onAskGeneral={askGeneral}
+            onStop={aiChat.abort}
+            permissionRequests={aiChat.permissionRequests}
+            onRespondToPermission={aiChat.respondToPermission}
+            aiProviders={aiProviders}
+            aiConfig={aiConfig}
+            onAIConfigChange={changeAIConfig}
+            inputPlaceholder="Ask about this codebase..."
+            emptyPrompt={(
+              <>Select source lines and click <strong>Ask AI</strong>, or ask about the repository below.</>
+            )}
+          />
+        </aside>
+      )}
+      {submitError && (
+        <div className="atlas-submit-error" role="alert">
+          <CircleAlert size={14} />
+          <span>{submitError}</span>
+          <button type="button" onClick={() => setSubmitError('')} title="Dismiss"><X size={13} /></button>
+        </div>
+      )}
     </main>
   );
 }

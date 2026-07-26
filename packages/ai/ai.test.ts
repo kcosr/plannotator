@@ -367,6 +367,24 @@ describe("Context builders", () => {
     expect(prompt).toContain("converted before annotation");
   });
 
+  test("buildSystemPrompt for codebase-atlas carries repository context, not a source snapshot", () => {
+    const ctx: AIContext = {
+      mode: "codebase-atlas",
+      atlas: {
+        rootPath: "/workspace/plannotator",
+        rootName: "plannotator",
+        annotations: "- packages/atlas/SourceView.tsx: inspect selection handling",
+      },
+    };
+    const prompt = buildSystemPrompt(ctx);
+    expect(prompt).toContain("Codebase Atlas");
+    expect(prompt).toContain("Name: plannotator");
+    expect(prompt).toContain("Root: /workspace/plannotator");
+    expect(prompt).toContain("inspect selection handling");
+    expect(prompt).toContain("selected ranges");
+    expect(prompt).toContain("user's messages");
+  });
+
   test("buildForkPreamble includes context and instructions", () => {
     const ctx: AIContext = {
       mode: "plan-review",
@@ -399,6 +417,23 @@ describe("Context builders", () => {
     expect(preamble).toContain("Lines 10-15");
   });
 
+  test("buildForkPreamble for codebase-atlas identifies the repository and annotations", () => {
+    const preamble = buildForkPreamble({
+      mode: "codebase-atlas",
+      atlas: {
+        rootPath: "/repo",
+        rootName: "example",
+        annotations: "- src/main.ts: clarify startup flow",
+      },
+      parent: { sessionId: "p", cwd: "/repo" },
+    });
+    expect(preamble).toContain("exploring a codebase in Plannotator");
+    expect(preamble).toContain("Name: example");
+    expect(preamble).toContain("Root: /repo");
+    expect(preamble).toContain("clarify startup flow");
+    expect(preamble).not.toContain("reviewing your work");
+  });
+
   test("truncates very long plans", () => {
     const longPlan = "x".repeat(100_000);
     const ctx: AIContext = {
@@ -415,6 +450,7 @@ describe("Context builders", () => {
       { mode: "plan-review", plan: { plan: "# Plan" } },
       { mode: "code-review", review: { patch: "+x" } },
       { mode: "annotate", annotate: { content: "# Doc", filePath: "/x.md" } },
+      { mode: "codebase-atlas", atlas: { rootPath: "/repo", rootName: "repo" } },
     ];
     for (const ctx of modes) {
       const prompt = buildSystemPrompt(ctx);

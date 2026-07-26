@@ -29,6 +29,8 @@ export function buildSystemPrompt(ctx: AIContext): string {
       return buildCodeReviewPrompt();
     case "annotate":
       return buildAnnotatePrompt(ctx);
+    case "codebase-atlas":
+      return buildCodebaseAtlasPrompt(ctx);
   }
 }
 
@@ -41,7 +43,9 @@ export function buildSystemPrompt(ctx: AIContext): string {
  */
 export function buildForkPreamble(ctx: AIContext): string {
   const lines: string[] = [
-    "The user is now reviewing your work in Plannotator and has a question.",
+    ctx.mode === "codebase-atlas"
+      ? "The user is exploring a codebase in Plannotator and has a question."
+      : "The user is now reviewing your work in Plannotator and has a question.",
     "Answer the user's message directly and concisely based on the conversation " +
       "history and the context below. Do not re-review or summarize the work unless they ask.",
     "",
@@ -110,6 +114,17 @@ export function buildForkPreamble(ctx: AIContext): string {
         lines.push("");
         lines.push("## User Annotations So Far");
         lines.push(ctx.annotate.annotations);
+      }
+      break;
+    }
+    case "codebase-atlas": {
+      lines.push("## Repository in Codebase Atlas");
+      lines.push(`Name: ${ctx.atlas.rootName}`);
+      lines.push(`Root: ${ctx.atlas.rootPath}`);
+      if (ctx.atlas.annotations) {
+        lines.push("");
+        lines.push("## User Annotations So Far");
+        lines.push(ctx.atlas.annotations);
       }
       break;
     }
@@ -242,6 +257,29 @@ function buildAnnotatePrompt(
     sections.push("");
     sections.push("## User Annotations");
     sections.push(ctx.annotate.annotations);
+  }
+
+  return sections.join("\n");
+}
+
+function buildCodebaseAtlasPrompt(
+  ctx: Extract<AIContext, { mode: "codebase-atlas" }>
+): string {
+  const sections: string[] = [
+    ANSWER_DIRECTLY,
+    "",
+    "The user is exploring a codebase in Plannotator's Codebase Atlas.",
+    "Current source files, selected ranges, and snippets are included with the user's messages as they navigate.",
+    "",
+    "## Repository",
+    `Name: ${ctx.atlas.rootName}`,
+    `Root: ${ctx.atlas.rootPath}`,
+  ];
+
+  if (ctx.atlas.annotations) {
+    sections.push("");
+    sections.push("## User Annotations");
+    sections.push(ctx.atlas.annotations);
   }
 
   return sections.join("\n");

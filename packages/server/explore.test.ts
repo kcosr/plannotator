@@ -5,7 +5,7 @@ import { createTestEnvironment } from "../../tests/helpers/environment";
 import { startExploreServer } from "./explore";
 
 const environment = createTestEnvironment(
-  ["PLANNOTATOR_PORT", "PLANNOTATOR_REMOTE"],
+  ["PLANNOTATOR_PORT", "PLANNOTATOR_REMOTE", "PLANNOTATOR_AI"],
   "plannotator-explore-",
 );
 const SPA_HTML = "<!doctype html><html><body>Atlas app</body></html>";
@@ -27,6 +27,7 @@ describe("explore server", () => {
   beforeEach(() => {
     environment.reset();
     process.env.PLANNOTATOR_REMOTE = "0";
+    process.env.PLANNOTATOR_AI = "disabled";
   });
 
   afterEach(() => environment.restore());
@@ -156,6 +157,24 @@ describe("explore server", () => {
       expect(missingApi.status).toBe(404);
       expect(missingApi.headers.get("content-type")).toContain("application/json");
 
+      const capabilities = await fetch(`${server.url}/api/ai/capabilities`);
+      expect(capabilities.status).toBe(200);
+      expect(await capabilities.json()).toEqual({ available: false, providers: [] });
+
+      const unavailableSession = await fetch(`${server.url}/api/ai/session`, {
+        method: "POST",
+      });
+      expect(unavailableSession.status).toBe(503);
+      expect(await unavailableSession.json()).toEqual({
+        error: "AI backend not available",
+      });
+
+      const missingAI = await fetch(`${server.url}/api/ai/not-real`);
+      expect(missingAI.status).toBe(404);
+      expect(await missingAI.json()).toEqual({
+        error: "API endpoint not found: /api/ai/not-real",
+      });
+
       const faviconResponse = await fetch(`${server.url}/favicon.png`);
       expect(faviconResponse.status).toBe(200);
       expect(faviconResponse.headers.get("content-type")).toBe("image/png");
@@ -182,6 +201,7 @@ describe("explore server", () => {
       expect(closeResponse.status).toBe(200);
       expect(await closeResponse.json()).toEqual({ ok: true });
       await closePromise;
+      await expect(server.waitForFeedback()).resolves.toBeNull();
       expect(closed).toBe(true);
     } finally {
       server.stop();
@@ -204,5 +224,70 @@ describe("explore server", () => {
     await closePromise;
 
     expect(closed).toBe(true);
+    await expect(server.waitForFeedback()).resolves.toBeNull();
+  });
+
+  test("validates and returns submitted Atlas feedback", async () => {
+    const root = environment.makeTempDir();
+    writeFileSync(join(root, "index.ts"), [
+      "export function value() {",
+      "  return 1;",
+      "}",
+      "",
+    ].join("\n"));
+    const server = await startExploreServer({
+      rootPath: root,
+      htmlContent: SPA_HTML,
+    });
+
+    const invalid = await fetch(`${server.url}/api/atlas/feedback`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        annotations: [{
+          id: "outside",
+          filePath: "../outside.ts",
+          lineStart: 1,
+          lineEnd: 1,
+          text: "Not contained",
+          createdAt: "2026-07-26T12:00:00.000Z",
+          snapshotGeneratedAt: "2026-07-26T11:59:00.000Z",
+        }],
+        markdown: "Invalid",
+      }),
+    });
+    expect(invalid.status).toBe(400);
+
+    const feedback = {
+      annotations: [{
+        id: "annotation-1",
+        filePath: "index.ts",
+        lineStart: 1,
+        lineEnd: 3,
+        text: "Review this function",
+        selectedCode: "export function value()",
+        createdAt: "2026-07-26T12:00:00.000Z",
+        snapshotGeneratedAt: "2026-07-26T11:59:00.000Z",
+      }],
+      markdown: "## Atlas feedback\n\nReview this function.",
+    };
+    const response = await fetch(`${server.url}/api/atlas/feedback`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(feedback),
+    });
+
+    expect(response.status).toBe(200);
+    expect(await response.json()).toEqual(feedback);
+    await expect(server.waitForFeedback()).resolves.toEqual(feedback);
+    await expect(server.waitForClose()).resolves.toBeUndefined();
+
+    const duplicate = await fetch(`${server.url}/api/atlas/feedback`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(feedback),
+    });
+    expect(duplicate.status).toBe(409);
+    server.stop();
   });
 });

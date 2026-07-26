@@ -545,9 +545,19 @@ export default function plannotator(pi: ExtensionAPI): void {
 				const session = await startCodebaseExploreBrowserSession(ctx, rootPath);
 				ctx.ui.notify(sessionOpenedMessage("Codebase Atlas opened", session.url), "info");
 				void session
-					.waitForClose()
-					.then(() => {
+					.waitForFeedback()
+					.then((feedback) => {
 						session.stop();
+						if (feedback?.markdown) {
+							sendUserMessageWithCurrentSessionFallback(
+								pi,
+								feedback.markdown,
+								{ deliverAs: "followUp" },
+								"Codebase Atlas feedback could not be sent",
+								origin,
+							);
+							return;
+						}
 						safeNotify(ctx, "Codebase Atlas session closed.", "info", origin);
 					})
 					.catch((error) => {

@@ -1,5 +1,9 @@
 /** The surface the user is interacting with when they invoke AI. */
-export type AIContextMode = "plan-review" | "code-review" | "annotate";
+export type AIContextMode =
+  | "plan-review"
+  | "code-review"
+  | "annotate"
+  | "codebase-atlas";
 
 /**
  * Describes the parent agent session that originally produced the plan or diff.
@@ -75,9 +79,25 @@ export interface AnnotateContext {
 }
 
 /**
+ * Repository-level context for Codebase Atlas.
+ *
+ * Current source files, selected ranges, and snippets are intentionally sent
+ * with each query so a long-lived session follows the user's live navigation.
+ */
+export interface CodebaseAtlasContext {
+  /** Absolute root directory available to the AI provider. */
+  rootPath: string;
+  /** Human-readable repository name shown in Atlas. */
+  rootName: string;
+  /** Summary of annotations the user has made so far. */
+  annotations?: string;
+}
+
+/**
  * Union of mode-specific contexts, discriminated by `mode`.
  */
 export type AIContext =
   | { mode: "plan-review"; plan: PlanContext; parent?: ParentSession }
   | { mode: "code-review"; review: CodeReviewContext; parent?: ParentSession }
-  | { mode: "annotate"; annotate: AnnotateContext; parent?: ParentSession };
+  | { mode: "annotate"; annotate: AnnotateContext; parent?: ParentSession }
+  | { mode: "codebase-atlas"; atlas: CodebaseAtlasContext; parent?: ParentSession };

@@ -26,6 +26,7 @@ export {
 	startReviewServer,
 } from "./server/serverReview.ts";
 export {
+	type AtlasFeedbackResult,
 	type ExploreServerResult,
 	startExploreServer,
 } from "./server/serverExplore.ts";

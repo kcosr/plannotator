@@ -1,11 +1,12 @@
 import path from 'path';
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import tailwindcss from '@tailwindcss/vite';
 import { viteSingleFile } from 'vite-plugin-singlefile';
 
 export default defineConfig({
   server: { port: 3012, host: '0.0.0.0' },
-  plugins: [react(), viteSingleFile()],
+  plugins: [react(), tailwindcss(), viteSingleFile()],
   resolve: {
     alias: {
       '@plannotator/atlas/styles': path.resolve(__dirname, '../../packages/atlas/styles.css'),

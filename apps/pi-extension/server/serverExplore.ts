@@ -14,6 +14,13 @@ import {
 	AtlasSemanticSession,
 	probeAtlasSemanticCapabilities,
 } from "../generated/atlas-semantic.ts";
+import { isAIEndpointPath } from "../generated/ai/endpoints.ts";
+import { resolveAIEnabled } from "../generated/config.ts";
+import {
+	createPiAIRuntime,
+	handlePiAIRequest,
+	type PiAIRuntime,
+} from "./ai-runtime.ts";
 import { handleFavicon } from "./handlers.ts";
 import { html, json, requestUrl } from "./helpers.ts";
 import { isRemoteSession, listenOnPort } from "./network.ts";
@@ -26,7 +33,24 @@ export interface ExploreServerResult {
 	url: string;
 	isRemote: boolean;
 	waitForClose: () => Promise<void>;
+	waitForFeedback: () => Promise<AtlasFeedbackResult | null>;
 	stop: () => void;
+}
+
+export interface AtlasFeedbackAnnotation {
+	id: string;
+	filePath: string;
+	lineStart: number;
+	lineEnd: number;
+	text: string;
+	selectedCode?: string;
+	createdAt: string;
+	snapshotGeneratedAt: string;
+}
+
+export interface AtlasFeedbackResult {
+	annotations: AtlasFeedbackAnnotation[];
+	markdown: string;
 }
 
 function isWithinDirectory(candidate: string, root: string): boolean {
@@ -57,6 +81,119 @@ function normalizeSourcePath(rootPath: string, requestedPath: string): string | 
 	}
 }
 
+function hasExactKeys(
+	value: Record<string, unknown>,
+	required: readonly string[],
+	optional: readonly string[] = [],
+): boolean {
+	const keys = Object.keys(value);
+	return required.every((key) => key in value)
+		&& keys.every((key) => required.includes(key) || optional.includes(key));
+}
+
+async function readRequestJson(req: import("node:http").IncomingMessage): Promise<unknown> {
+	const chunks: Buffer[] = [];
+	for await (const chunk of req) {
+		chunks.push(Buffer.isBuffer(chunk) ? chunk : Buffer.from(chunk));
+	}
+	return JSON.parse(Buffer.concat(chunks).toString("utf8"));
+}
+
+async function parseAtlasFeedback(
+	req: import("node:http").IncomingMessage,
+	rootPath: string,
+): Promise<AtlasFeedbackResult | string> {
+	let body: unknown;
+	try {
+		body = await readRequestJson(req);
+	} catch {
+		return "Request body must be valid JSON";
+	}
+	if (
+		!body
+		|| typeof body !== "object"
+		|| Array.isArray(body)
+		|| !hasExactKeys(body as Record<string, unknown>, ["annotations", "markdown"])
+	) {
+		return "Request body must contain exactly annotations and markdown";
+	}
+
+	const { annotations, markdown } = body as Record<string, unknown>;
+	if (!Array.isArray(annotations) || typeof markdown !== "string") {
+		return "Annotations must be an array and markdown must be a string";
+	}
+
+	const parsed: AtlasFeedbackAnnotation[] = [];
+	const ids = new Set<string>();
+	for (const value of annotations) {
+		if (
+			!value
+			|| typeof value !== "object"
+			|| Array.isArray(value)
+			|| !hasExactKeys(
+				value as Record<string, unknown>,
+				["id", "filePath", "lineStart", "lineEnd", "text", "createdAt", "snapshotGeneratedAt"],
+				["selectedCode"],
+			)
+		) {
+			return "Each annotation must contain the expected Atlas annotation fields";
+		}
+		const annotation = value as Record<string, unknown>;
+		const {
+			id,
+			filePath,
+			lineStart,
+			lineEnd,
+			text,
+			selectedCode,
+			createdAt,
+			snapshotGeneratedAt,
+		} = annotation;
+		if (
+			typeof id !== "string"
+			|| id.length === 0
+			|| ids.has(id)
+			|| typeof filePath !== "string"
+			|| typeof text !== "string"
+			|| typeof createdAt !== "string"
+			|| createdAt.length === 0
+			|| typeof snapshotGeneratedAt !== "string"
+			|| snapshotGeneratedAt.length === 0
+			|| (selectedCode !== undefined && typeof selectedCode !== "string")
+			|| !Number.isInteger(lineStart)
+			|| !Number.isInteger(lineEnd)
+			|| (lineStart as number) < 1
+			|| (lineEnd as number) < (lineStart as number)
+		) {
+			return "Annotation fields are invalid";
+		}
+
+		const sourcePath = normalizeSourcePath(rootPath, filePath);
+		if (!sourcePath || sourcePath !== filePath.replace(/\\/g, "/")) {
+			return `Annotation path is outside the repository or invalid: ${filePath}`;
+		}
+		const source = await readAtlasSource(rootPath, sourcePath);
+		const lineCount = source.content.split(/\r?\n/).length;
+		if ((lineEnd as number) > lineCount) {
+			return `Annotation line range is outside the source file: ${filePath}`;
+		}
+
+		ids.add(id);
+		parsed.push({
+			id,
+			filePath,
+			lineStart: lineStart as number,
+			lineEnd: lineEnd as number,
+			text,
+			...(selectedCode !== undefined && { selectedCode }),
+			createdAt,
+			snapshotGeneratedAt,
+		});
+	}
+
+	return { annotations: parsed, markdown };
+}
+
 export async function startExploreServer(options: {
 	rootPath: string;
 	htmlContent: string;
@@ -71,16 +208,47 @@ export async function startExploreServer(options: {
 	let indexingError: string | undefined;
 	let activeBuild: Promise<void> | undefined;
 	const semanticSession = new AtlasSemanticSession();
+	let aiRuntimePromise: Promise<PiAIRuntime | null> | undefined;
+	const getAIRuntime = (): Promise<PiAIRuntime | null> => {
+		if (!aiRuntimePromise) {
+			aiRuntimePromise = resolveAIEnabled()
+				? createPiAIRuntime({ cwd: rootPath })
+				: Promise.resolve(null);
+		}
+		return aiRuntimePromise;
+	};
 	let stopped = false;
 	let closeResolved = false;
+	let feedbackResolved = false;
 	let resolveClose!: () => void;
+	let resolveFeedback!: (feedback: AtlasFeedbackResult | null) => void;
 	const closePromise = new Promise<void>((resolvePromise) => {
 		resolveClose = resolvePromise;
+	});
+	const feedbackPromise = new Promise<AtlasFeedbackResult | null>((resolvePromise) => {
+		resolveFeedback = resolvePromise;
 	});
 	const resolveCloseOnce = (): void => {
 		if (closeResolved) return;
 		closeResolved = true;
 		resolveClose();
+	};
+	const resolveFeedbackOnce = (feedback: AtlasFeedbackResult | null): boolean => {
+		if (feedbackResolved) return false;
+		feedbackResolved = true;
+		resolveFeedback(feedback);
+		resolveCloseOnce();
+		return true;
+	};
+	let disposePromise: Promise<void> | undefined;
+	const disposeRuntimes = (): Promise<void> => {
+		if (!disposePromise) {
+			disposePromise = Promise.all([
+				semanticSession.dispose(),
+				aiRuntimePromise?.then((runtime) => runtime?.dispose()),
+			]).then(() => {});
+		}
+		return disposePromise;
 	};
 
 	const beginIndexing = (): Promise<void> => {
@@ -292,11 +460,42 @@ export async function startExploreServer(options: {
 				return;
 			}
 
+			if (method === "POST" && url.pathname === "/api/atlas/feedback") {
+				if (feedbackResolved) {
+					json(res, { error: "Atlas session is already closed" }, 409);
+					return;
+				}
+				const feedback = await parseAtlasFeedback(req, rootPath);
+				if (typeof feedback === "string") {
+					json(res, { error: feedback }, 400);
+					return;
+				}
+				if (!resolveFeedbackOnce(feedback)) {
+					json(res, { error: "Atlas session is already closed" }, 409);
+					return;
+				}
+				await disposeRuntimes();
+				json(res, feedback);
+				return;
+			}
+
 			if (method === "POST" && url.pathname === "/api/atlas/close") {
-				await semanticSession.dispose();
-				resolveCloseOnce();
+				resolveFeedbackOnce(null);
+				await disposeRuntimes();
 				json(res, { ok: true });
 				return;
+			}
+
+			if (url.pathname === "/api/ai/query") {
+				req.socket.setTimeout(0);
+				res.setTimeout(0);
+			}
+			if (url.pathname.startsWith("/api/ai/")) {
+				if (!isAIEndpointPath(url.pathname)) {
+					json(res, { error: `API endpoint not found: ${url.pathname}` }, 404);
+					return;
+				}
+				if (await handlePiAIRequest(req, res, url, await getAIRuntime())) return;
 			}
 
 			if (url.pathname === "/api" || url.pathname.startsWith("/api/")) {
@@ -332,11 +531,12 @@ export async function startExploreServer(options: {
 		url: `http://localhost:${port}`,
 		isRemote,
 		waitForClose: () => closePromise,
+		waitForFeedback: () => feedbackPromise,
 		stop: () => {
 			if (stopped) return;
 			stopped = true;
-			resolveCloseOnce();
-			void semanticSession.dispose();
+			resolveFeedbackOnce(null);
+			void disposeRuntimes();
 			server.close();
 		},
 	};

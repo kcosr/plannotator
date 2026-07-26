@@ -69,6 +69,7 @@ export type {
   PlanContext,
   CodeReviewContext,
   AnnotateContext,
+  CodebaseAtlasContext,
   ParentSession,
   CreateSessionOptions,
   ClaudeAgentSDKConfig,
