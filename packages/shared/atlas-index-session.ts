@@ -14,6 +14,8 @@ import {
 	type OpenAtlasSnapshotCacheOptions,
 } from "./atlas-snapshot-cache";
 
+const MAX_STABILITY_ATTEMPTS = 3;
+
 export interface AtlasIndexSessionStatus {
 	status: "indexing" | "ready" | "error";
 	phase: "checking" | "indexing" | "ready" | "error";
@@ -186,7 +188,7 @@ export class AtlasIndexSession {
 			refreshing: true,
 		};
 		try {
-			const repositoryFingerprint = await this.#collectFingerprint(this.rootPath);
+			let repositoryFingerprint = await this.#collectFingerprint(this.rootPath);
 			if (this.#disposed) return;
 			if (
 				!force &&
@@ -212,13 +214,24 @@ export class AtlasIndexSession {
 				...(this.#status.source && { source: this.#status.source }),
 				refreshing: true,
 			};
-			const nextSnapshot = await this.#buildSnapshot({
-				rootPath: this.rootPath,
-				repositoryFingerprint,
-				forced: force,
-			});
+			let nextSnapshot: AtlasSnapshot | undefined;
+			for (let attempt = 1; attempt <= MAX_STABILITY_ATTEMPTS; attempt += 1) {
+				nextSnapshot = await this.#buildSnapshot({
+					rootPath: this.rootPath,
+					repositoryFingerprint,
+					forced: force,
+				});
+				if (this.#disposed) return;
+				const afterBuildFingerprint = await this.#collectFingerprint(this.rootPath);
+				if (afterBuildFingerprint === repositoryFingerprint) break;
+				if (attempt === MAX_STABILITY_ATTEMPTS) {
+					throw new Error("Repository kept changing while Atlas was indexing");
+				}
+				repositoryFingerprint = afterBuildFingerprint;
+			}
 			if (this.#disposed) return;
 			if (
+				!nextSnapshot ||
 				!isAtlasSnapshot(nextSnapshot) ||
 				nextSnapshot.rootPath !== this.rootPath
 			) {

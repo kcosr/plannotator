@@ -264,9 +264,40 @@ describe("AtlasIndexSession", () => {
 		await firstManual;
 
 		expect(buildCalls).toBe(2);
-		expect(fingerprintCalls).toBe(2);
+		expect(fingerprintCalls).toBe(4);
 		expect(session.getSnapshot()?.generatedAt).toBe("2026-07-26T11:00:00.000Z");
 		expect(session.getStatus().revision).toBe(2);
+	});
+
+	test("rebuilds before caching when source changes during indexing", async () => {
+		const { root, databasePath } = temporaryRepository();
+		const fingerprints = ["fingerprint-a", "fingerprint-b", "fingerprint-b"];
+		let builds = 0;
+		const stable = snapshot(root, "fingerprint-b");
+		const session = await AtlasIndexSession.open({
+			rootPath: root,
+			cacheOptions: { databasePath },
+			collectFingerprint: async () => fingerprints.shift() ?? "fingerprint-b",
+			buildSnapshot: async ({ repositoryFingerprint }) => {
+				builds += 1;
+				return snapshot(root, repositoryFingerprint);
+			},
+		});
+		sessions.push(session);
+
+		session.start();
+		await session.waitUntilIdle();
+		expect(builds).toBe(2);
+		expect(session.getSnapshot()?.generatedAt).toBe("fingerprint-b");
+
+		await session.dispose();
+		const cache = await openAtlasSnapshotCache({ databasePath });
+		expect(cache.getLatest(root, ATLAS_SNAPSHOT_VERSION, isAtlasSnapshot))
+			.toMatchObject({
+				snapshot: stable,
+				repositoryFingerprint: "fingerprint-b",
+			});
+		cache.close();
 	});
 
 	test("a forced reindex rebuilds even when the fingerprint is unchanged", async () => {
