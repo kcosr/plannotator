@@ -41,6 +41,9 @@ capabilities to the client.
 Atlas snapshots remain session-memory state. No persistent Atlas cache is added
 by this decision. Language servers may use their own required project caches;
 those are owned by the external tools, not by the Atlas snapshot contract.
+In particular, Atlas enables clangd's background index; clangd may persist that
+index in its standard `.cache/clangd/index` location near the compilation
+database.
 
 ## Rationale
 

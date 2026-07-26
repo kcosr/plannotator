@@ -165,7 +165,7 @@ const SERVER_DEFINITIONS: ServerDefinition[] = [
 		id: "clangd",
 		languages: ["c", "cpp"],
 		executable: "clangd",
-		args: [],
+		args: ["--background-index"],
 		versionArgs: ["--version"],
 		envVariable: "PLANNOTATOR_LSP_CLANGD",
 	},

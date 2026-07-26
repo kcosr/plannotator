@@ -33,6 +33,13 @@ interface SourceViewProps {
   onNavigateFile: (target: NavigationTarget) => void;
 }
 
+const PIERRE_SOURCE_CSS = `
+  :host { height: 100% !important; color-scheme: light dark; }
+  [data-file], [data-code] { height: 100% !important; }
+  [data-code] { overflow: auto !important; }
+  [data-token] { cursor: pointer; }
+`;
+
 function locationKey(location: ReferenceLocation) {
   return `${location.filePath}:${location.line}:${location.column}`;
 }
@@ -163,11 +170,29 @@ export function SourceView({
     if (position) inspectSymbol(position.symbol, position.line, position.column);
   }, [inspectSymbol]);
 
-  const selectedLines: SelectedLineRange | null = targetLine
-    ? { start: targetLine, end: targetLine }
-    : matches[matchIndex]
-      ? { start: matches[matchIndex], end: matches[matchIndex] }
-      : null;
+  const selectedLines = useMemo<SelectedLineRange | null>(() => {
+    const line = targetLine ?? matches[matchIndex];
+    return line ? { start: line, end: line } : null;
+  }, [targetLine, matches, matchIndex]);
+
+  const pierreFile = useMemo(() => source
+    ? { name: node.name, contents: source.content }
+    : null, [node.name, source]);
+
+  const onLineClick = useCallback((props: LineEventBaseProps) => {
+    if (props.lineNumber) scrollToLine(props.lineNumber);
+  }, [scrollToLine]);
+
+  const pierreOptions = useMemo(() => ({
+    themeType: 'system' as const,
+    overflow: 'scroll' as const,
+    disableFileHeader: true,
+    enableLineSelection: true,
+    lineHoverHighlight: 'line' as const,
+    onLineClick,
+    onTokenClick,
+    unsafeCSS: PIERRE_SOURCE_CSS,
+  }), [onLineClick, onTokenClick]);
 
   const semanticProvider = analyzers.semantic.providers.find(
     (provider) => provider.language.toLowerCase() === node.language?.toLowerCase(),
@@ -234,29 +259,13 @@ export function SourceView({
         <div className="atlas-source-code" ref={hostRef}>
           {loading && <div className="atlas-loading-inline"><span className="atlas-spinner" />Loading source…</div>}
           {error && <div className="atlas-empty"><strong>Could not load source</strong><span>{error}</span></div>}
-          {source && (
+          {pierreFile && (
             <File
               key={node.path}
-              file={{ name: node.name, contents: source.content }}
+              file={pierreFile}
               selectedLines={selectedLines}
               className="atlas-pierre-file"
-              options={{
-                themeType: 'system',
-                overflow: 'scroll',
-                disableFileHeader: true,
-                enableLineSelection: true,
-                lineHoverHighlight: 'line',
-                onLineClick: (props: LineEventBaseProps) => {
-                  if (props.lineNumber) scrollToLine(props.lineNumber);
-                },
-                onTokenClick,
-                unsafeCSS: `
-                  :host { height: 100% !important; color-scheme: light dark; }
-                  [data-file], [data-code] { height: 100% !important; }
-                  [data-code] { overflow: auto !important; }
-                  [data-token] { cursor: pointer; }
-                `,
-              }}
+              options={pierreOptions}
             />
           )}
         </div>

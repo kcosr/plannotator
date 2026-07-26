@@ -221,6 +221,25 @@ describe("Atlas semantic capability probing", () => {
 		expect(capability.available).toBe(true);
 		expect(capability.command).toBe(overrideExecutable);
 	});
+
+	test("enables clangd's project background index for C and C++", async () => {
+		const bin = temporaryDirectory("atlas-semantic-clangd-");
+		const executable = join(bin, "clangd");
+		writeExecutable(executable, MOCK_LSP_SOURCE);
+
+		const capability = await probeAtlasSemanticCapability("cpp", {
+			env: environmentWithPath(bin),
+			timeoutMs: 1_000,
+		});
+
+		expect(capability).toMatchObject({
+			language: "cpp",
+			serverId: "clangd",
+			available: true,
+			command: executable,
+			args: ["--background-index"],
+		});
+	});
 });
 
 describe("Atlas semantic session", () => {
@@ -229,7 +248,7 @@ describe("Atlas semantic session", () => {
 		const root = temporaryDirectory("atlas-semantic-repo-");
 		const eventsPath = join(root, "events.ndjson");
 		const executable = join(bin, "typescript-language-server");
-		const sourcePath = join(root, "src", "use.ts");
+		const sourcePath = join(root, "src", "use.tsx");
 		const definitionPath = join(root, "src", "target.ts");
 		mkdirSync(join(root, "src"), { recursive: true });
 		writeFileSync(sourcePath, "import { target } from './target';\ntarget();\n");
@@ -250,7 +269,7 @@ describe("Atlas semantic session", () => {
 
 		const locations = await session.findLocations(
 			root,
-			"src/use.ts",
+			"src/use.tsx",
 			2,
 			3,
 			"typescript",
@@ -269,7 +288,7 @@ describe("Atlas semantic session", () => {
 			],
 			references: [
 				{
-					filePath: "src/use.ts",
+					filePath: "src/use.tsx",
 					range: {
 						start: { line: 4, column: 3 },
 						end: { line: 4, column: 7 },
@@ -289,7 +308,10 @@ describe("Atlas semantic session", () => {
 			.map((line) => JSON.parse(line) as {
 				id?: number;
 				method?: string;
-				params?: { position?: { line: number; character: number } };
+				params?: {
+					position?: { line: number; character: number };
+					textDocument?: { languageId?: string };
+				};
 				result?: unknown;
 			});
 		expect(messages).toContainEqual({ jsonrpc: "2.0", id: 900, result: [null] });
@@ -299,7 +321,55 @@ describe("Atlas semantic session", () => {
 				?.params?.position,
 		).toEqual({ line: 1, character: 2 });
 		expect(messages.some((message) => message.method === "textDocument/didOpen")).toBe(true);
+		expect(
+			messages.find((message) => message.method === "textDocument/didOpen")
+				?.params?.textDocument?.languageId,
+		).toBe("typescriptreact");
 		expect(messages.some((message) => message.method === "textDocument/didClose")).toBe(true);
+	});
+
+	test("uses clangd for C++ files and sends the C++ language identifier", async () => {
+		const bin = temporaryDirectory("atlas-semantic-cpp-bin-");
+		const root = temporaryDirectory("atlas-semantic-cpp-repo-");
+		const eventsPath = join(root, "events.ndjson");
+		const executable = join(bin, "clangd");
+		const sourcePath = join(root, "src", "use.cpp");
+		const definitionPath = join(root, "include", "target.hpp");
+		mkdirSync(join(root, "src"), { recursive: true });
+		mkdirSync(join(root, "include"), { recursive: true });
+		writeFileSync(sourcePath, '#include "target.hpp"\nint value = target();\n');
+		writeFileSync(definitionPath, "int target();\n");
+		writeExecutable(executable, MOCK_LSP_SOURCE);
+		const env = environmentWithPath(bin);
+		env.MOCK_LSP_EVENTS = eventsPath;
+		env.MOCK_DEFINITION_URI = pathToFileURL(definitionPath).href;
+		env.MOCK_REFERENCE_URI = pathToFileURL(sourcePath).href;
+
+		const session = new AtlasSemanticSession({
+			env,
+			timeoutMs: 1_000,
+			initializeTimeoutMs: 2_000,
+			requestTimeoutMs: 2_000,
+		});
+		sessions.add(session);
+
+		await session.findLocations(root, "src/use.cpp", 2, 13, "cpp");
+
+		for (let attempt = 0; attempt < 50; attempt += 1) {
+			if (readFileSync(eventsPath, "utf8").includes("textDocument/didClose")) break;
+			await Bun.sleep(10);
+		}
+		const messages = readFileSync(eventsPath, "utf8")
+			.trim()
+			.split("\n")
+			.map((line) => JSON.parse(line) as {
+				method?: string;
+				params?: { textDocument?: { languageId?: string } };
+			});
+		expect(
+			messages.find((message) => message.method === "textDocument/didOpen")
+				?.params?.textDocument?.languageId,
+		).toBe("cpp");
 	});
 
 	test("times out a language server that does not answer location requests", async () => {
