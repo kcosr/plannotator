@@ -14,6 +14,7 @@ export interface AIRuntime {
 }
 
 export const AI_QUERY_ENDPOINT = "/api/ai/query";
+export const AI_CAPABILITIES_ENDPOINT = "/api/ai/capabilities";
 
 interface CreateAIRuntimeOptions {
   cwd?: string;

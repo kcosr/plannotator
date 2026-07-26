@@ -22,6 +22,7 @@ import { resolveAIEnabled } from "../generated/config.ts";
 import {
 	createPiAIRuntime,
 	handlePiAIRequest,
+	AI_QUERY_ENDPOINT,
 	type PiAIRuntime,
 } from "./ai-runtime.ts";
 import { handleFavicon } from "./handlers.ts";
@@ -529,7 +530,7 @@ export async function startExploreServer(options: {
 				return;
 			}
 
-			if (url.pathname === "/api/ai/query") {
+			if (url.pathname === AI_QUERY_ENDPOINT) {
 				req.socket.setTimeout(0);
 				res.setTimeout(0);
 			}

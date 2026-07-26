@@ -28,7 +28,12 @@ import {
 import { isAIEndpointPath, type AIEndpoints } from "@plannotator/ai";
 import { resolveAIEnabled } from "./config";
 import { isWithinDirectory } from "@plannotator/shared/html-assets-node";
-import { AI_QUERY_ENDPOINT, createAIRuntime, type AIRuntime } from "./ai-runtime";
+import {
+  AI_CAPABILITIES_ENDPOINT,
+  AI_QUERY_ENDPOINT,
+  createAIRuntime,
+  type AIRuntime,
+} from "./ai-runtime";
 import {
   getServerHostname,
   isRemoteSession,
@@ -550,7 +555,7 @@ export async function startExploreServer(
           }
           const aiRuntime = await getAIRuntime();
           if (!aiRuntime) {
-            if (url.pathname === "/api/ai/capabilities" && method === "GET") {
+            if (url.pathname === AI_CAPABILITIES_ENDPOINT && method === "GET") {
               return Response.json({ available: false, providers: [] });
             }
             return jsonError("AI backend not available", 503);

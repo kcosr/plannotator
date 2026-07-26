@@ -6,6 +6,8 @@ import { isAIEndpointPath } from "../generated/ai/endpoints.ts";
 import { resolveCommandFromWhichOutput } from "../generated/ai/providers/command-path.ts";
 import { handleApiNotFound, json, toWebRequest } from "./helpers.ts";
 
+export const AI_QUERY_ENDPOINT = "/api/ai/query";
+
 export interface PiAIRuntime {
 	endpoints: Record<string, (req: Request) => Promise<Response>>;
 	dispose: () => void;
