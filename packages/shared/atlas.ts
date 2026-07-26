@@ -122,6 +122,7 @@ export interface AtlasSemanticProviderCapability {
 	language: string;
 	name: string;
 	available: boolean;
+	version?: string;
 	source?: string;
 	reason?: string;
 }

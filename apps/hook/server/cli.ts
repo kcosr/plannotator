@@ -24,18 +24,33 @@ export function formatIndexSuccess(result: {
   symbols: number;
   indexPath: string;
   source: "fresh" | "cache";
+  semantic?: {
+    completed: number;
+    cached: number;
+    resolved: number;
+    unsupported: number;
+    failed: number;
+  };
 }): string {
-  return `Indexed ${result.files} files, ${result.symbols} symbols (${result.source}); index: ${result.indexPath}`;
+  const semantic = result.semantic
+    ? `; semantic: ${result.semantic.completed} queries (${result.semantic.cached} cached, ${result.semantic.resolved} resolved, ${result.semantic.unsupported} unsupported, ${result.semantic.failed} retryable)`
+    : "";
+  return `Indexed ${result.files} files, ${result.symbols} symbols (${result.source}); index: ${result.indexPath}${semantic}`;
 }
 
 export interface AtlasCommandArgs {
   rootPath?: string;
   indexPath?: string;
+  semantic: boolean;
 }
 
-export function parseAtlasCommandArgs(args: string[]): AtlasCommandArgs {
+export function parseAtlasCommandArgs(
+  args: string[],
+  options: { allowSemantic?: boolean } = {},
+): AtlasCommandArgs {
   let rootPath: string | undefined;
   let indexPath: string | undefined;
+  let semantic = false;
 
   for (let index = 0; index < args.length; index += 1) {
     const argument = args[index];
@@ -51,6 +66,13 @@ export function parseAtlasCommandArgs(args: string[]): AtlasCommandArgs {
       index += 1;
       continue;
     }
+    if (argument === "--semantic") {
+      if (!options.allowSemantic) {
+        throw new Error("--semantic is only supported by plannotator index");
+      }
+      semantic = true;
+      continue;
+    }
     if (argument.startsWith("-")) {
       throw new Error(`Unknown option: ${argument}`);
     }
@@ -60,7 +82,7 @@ export function parseAtlasCommandArgs(args: string[]): AtlasCommandArgs {
     rootPath = argument;
   }
 
-  return { rootPath, indexPath };
+  return { rootPath, indexPath, semantic };
 }
 
 export function isInteractiveNoArgInvocation(
@@ -78,7 +100,7 @@ export function formatTopLevelHelp(): string {
     "  plannotator [--browser <name>]",
     "  plannotator review [--git | --gitbutler] [PR_URL]",
     "  plannotator explore [path] [--index-path <file>]",
-    "  plannotator index [path] [--index-path <file>]",
+    "  plannotator index [path] [--index-path <file>] [--semantic]",
     "  plannotator annotate <file.md | file.txt | file.html | https://... | folder/>  [--markdown] [--no-jina] [--gate] [--json] [--hook]",
     "  plannotator annotate-last [--stdin] [--gate] [--json] [--hook]",
     "  plannotator setup-goal <interview|facts> <bundle.json | -> [--json]",
@@ -115,7 +137,7 @@ const SUBCOMMAND_HELP: Record<string, string> = {
   ].join("\n"),
   index: [
     "Usage:",
-    "  plannotator index [path] [--index-path <file>]",
+    "  plannotator index [path] [--index-path <file>] [--semantic]",
     "",
     "Build a codebase atlas for a directory.",
     "",
@@ -124,6 +146,7 @@ const SUBCOMMAND_HELP: Record<string, string> = {
     "",
     "Options:",
     "  --index-path  Index database path (relative paths resolve from the repository)",
+    "  --semantic    Resolve and persist references, callers, callees, and call sites",
   ].join("\n"),
   review: [
     "Usage:",
@@ -238,7 +261,7 @@ export function formatInteractiveNoArgClarification(): string {
     "For interactive use, try:",
     "  plannotator review",
     "  plannotator explore [path] [--index-path <file>]",
-    "  plannotator index [path] [--index-path <file>]",
+    "  plannotator index [path] [--index-path <file>] [--semantic]",
     "  plannotator annotate <file.md | file.txt | file.html | https://...>",
     "  plannotator setup-goal interview bundle.json --json",
     "  plannotator last",

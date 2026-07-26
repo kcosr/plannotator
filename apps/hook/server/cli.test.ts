@@ -108,6 +108,7 @@ describe("CLI subcommand help", () => {
     );
     expect(formatSubcommandHelp("index")).toContain("plannotator index [path]");
     expect(formatSubcommandHelp("index")).toContain("Build a codebase atlas");
+    expect(formatSubcommandHelp("index")).toContain("--semantic");
     expect(formatSubcommandHelp("explore")).toContain("--index-path");
     expect(formatSubcommandHelp("review")).toContain("--gitbutler");
     expect(formatSubcommandHelp("review")).toContain("PR_URL");
@@ -144,17 +145,37 @@ describe("CLI index result", () => {
     );
   });
 
+  test("formats blocking semantic index results", () => {
+    expect(formatIndexSuccess({
+      files: 42,
+      symbols: 317,
+      source: "cache",
+      indexPath: "/repo/.plannotator/atlas.sqlite3",
+      semantic: {
+        completed: 20,
+        cached: 8,
+        resolved: 10,
+        unsupported: 1,
+        failed: 1,
+      },
+    })).toContain(
+      "semantic: 20 queries (8 cached, 10 resolved, 1 unsupported, 1 retryable)",
+    );
+  });
+
 });
 
 describe("Atlas command arguments", () => {
   test("parses a path and portable index override", () => {
     expect(parseAtlasCommandArgs([
+      "--semantic",
       "--index-path",
       ".cache/atlas.sqlite3",
       "./repo",
-    ])).toEqual({
+    ], { allowSemantic: true })).toEqual({
       rootPath: "./repo",
       indexPath: ".cache/atlas.sqlite3",
+      semantic: true,
     });
   });
 
@@ -166,6 +187,7 @@ describe("Atlas command arguments", () => {
     ])).toEqual({
       rootPath: "/repo",
       indexPath: "/indexes/repo.sqlite3",
+      semantic: false,
     });
   });
 
@@ -176,6 +198,8 @@ describe("Atlas command arguments", () => {
       .toThrow("Only one repository");
     expect(() => parseAtlasCommandArgs(["--wat"]))
       .toThrow("Unknown option");
+    expect(() => parseAtlasCommandArgs(["--semantic"]))
+      .toThrow("only supported");
   });
 });
 

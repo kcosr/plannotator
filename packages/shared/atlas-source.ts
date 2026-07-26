@@ -76,6 +76,16 @@ export interface SearchAtlasReferencesOptions {
 	maxFileBytes?: number;
 }
 
+export type AtlasSemanticResolutionOutcome<T> =
+	| {
+			cacheability: "complete" | "unsupported";
+			response: T;
+	  }
+	| {
+			cacheability: "transient" | "fallback";
+			response: T;
+	  };
+
 const DEFAULT_SOURCE_MAX_BYTES = 2 * 1024 * 1024;
 const DEFAULT_REFERENCE_RESULTS = 200;
 const DEFAULT_CALL_HIERARCHY_TARGETS = 200;
@@ -471,7 +481,7 @@ async function convertCallHierarchyCalls(
 	return { targets: [...grouped.values()], truncated };
 }
 
-export async function resolveAtlasCallHierarchy(
+export async function resolveAtlasCallHierarchyOutcome(
 	session: AtlasSemanticSession,
 	rootPath: string,
 	snapshot: AtlasSnapshot,
@@ -479,7 +489,7 @@ export async function resolveAtlasCallHierarchy(
 	line: number,
 	column: number,
 	signal?: AbortSignal,
-): Promise<AtlasCallHierarchyResponse> {
+): Promise<AtlasSemanticResolutionOutcome<AtlasCallHierarchyResponse>> {
 	signal?.throwIfAborted();
 	const normalizedPath = validateAtlasRelativePath(filePath);
 	const node = snapshot.nodes.find(
@@ -492,20 +502,23 @@ export async function resolveAtlasCallHierarchy(
 	);
 	const providerName = capability?.name ?? node.language ?? "language server";
 
-	if (!language || capability?.available === false) {
+	if (!language) {
 		const reason =
 			capability?.reason ??
 			`No language server is configured for ${node.language ?? "this file"}`;
 		return {
-			root: null,
-			callers: [],
-			callees: [],
-			truncated: false,
-			provider: {
-				kind: "lsp",
-				name: providerName,
-				status: "unavailable",
-				message: reason.replace(/[.\s]+$/, ""),
+			cacheability: "fallback",
+			response: {
+				root: null,
+				callers: [],
+				callees: [],
+				truncated: false,
+				provider: {
+					kind: "lsp",
+					name: providerName,
+					status: "unavailable",
+					message: reason.replace(/[.\s]+$/, ""),
+				},
 			},
 		};
 	}
@@ -533,15 +546,18 @@ export async function resolveAtlasCallHierarchy(
 		}
 		if (!hierarchy.supported) {
 			return {
-				root: null,
-				callers: [],
-				callees: [],
-				truncated: false,
-				provider: {
-					kind: "lsp",
-					name: providerName,
-					status: "unsupported",
-					message: `${providerName} does not advertise LSP call hierarchy support`,
+				cacheability: "unsupported",
+				response: {
+					root: null,
+					callers: [],
+					callees: [],
+					truncated: false,
+					provider: {
+						kind: "lsp",
+						name: providerName,
+						status: "unsupported",
+						message: `${providerName} does not advertise LSP call hierarchy support`,
+					},
 				},
 			};
 		}
@@ -583,14 +599,17 @@ export async function resolveAtlasCallHierarchy(
 			sourceLines,
 		);
 		return {
-			root,
-			callers: callers.targets,
-			callees: callees.targets,
-			truncated: callers.truncated || callees.truncated,
-			provider: {
-				kind: "lsp",
-				name: providerName,
-				status: "ready",
+			cacheability: "complete",
+			response: {
+				root,
+				callers: callers.targets,
+				callees: callees.targets,
+				truncated: callers.truncated || callees.truncated,
+				provider: {
+					kind: "lsp",
+					name: providerName,
+					status: "ready",
+				},
 			},
 		};
 	} catch (error) {
@@ -601,21 +620,46 @@ export async function resolveAtlasCallHierarchy(
 		const message = (error instanceof Error ? error.message : String(error))
 			.replace(/[.\s]+$/, "");
 		return {
-			root: null,
-			callers: [],
-			callees: [],
-			truncated: false,
-			provider: {
-				kind: "lsp",
-				name,
-				status: "unavailable",
-				message: `${name} could not provide call hierarchy: ${message}`,
+			cacheability: "transient",
+			response: {
+				root: null,
+				callers: [],
+				callees: [],
+				truncated: false,
+				provider: {
+					kind: "lsp",
+					name,
+					status: "unavailable",
+					message: `${name} could not provide call hierarchy: ${message}`,
+				},
 			},
 		};
 	}
 }
 
-export async function resolveAtlasReferences(
+export async function resolveAtlasCallHierarchy(
+	session: AtlasSemanticSession,
+	rootPath: string,
+	snapshot: AtlasSnapshot,
+	filePath: string,
+	line: number,
+	column: number,
+	signal?: AbortSignal,
+): Promise<AtlasCallHierarchyResponse> {
+	return (
+		await resolveAtlasCallHierarchyOutcome(
+			session,
+			rootPath,
+			snapshot,
+			filePath,
+			line,
+			column,
+			signal,
+		)
+	).response;
+}
+
+export async function resolveAtlasReferencesOutcome(
 	session: AtlasSemanticSession,
 	rootPath: string,
 	snapshot: AtlasSnapshot,
@@ -623,7 +667,9 @@ export async function resolveAtlasReferences(
 	filePath: string,
 	line: number,
 	column: number,
-): Promise<AtlasReferenceResponse> {
+	signal?: AbortSignal,
+): Promise<AtlasSemanticResolutionOutcome<AtlasReferenceResponse>> {
+	signal?.throwIfAborted();
 	const normalizedPath = validateAtlasRelativePath(filePath);
 	const node = snapshot.nodes.find(
 		(candidate) => candidate.kind === "file" && candidate.path === normalizedPath,
@@ -640,18 +686,21 @@ export async function resolveAtlasReferences(
 		(provider) => provider.language === node.language,
 	);
 
-	if (!language || capability?.available === false) {
+	if (!language) {
 		const name = capability?.name ?? node.language ?? "language server";
 		const reason = capability?.reason ?? `No language server is configured for ${node.language ?? "this file"}`;
 		const detail = reason.replace(/[.\s]+$/, "");
 		return {
-			definitions: indexedDeclarations,
-			references: [],
-			provider: {
-				kind: "syntax",
-				name: snapshot.analyzers.structural.name,
-				status: "unavailable",
-				message: `${name} is unavailable: ${detail}. Showing indexed declarations only.`,
+			cacheability: "fallback",
+			response: {
+				definitions: indexedDeclarations,
+				references: [],
+				provider: {
+					kind: "syntax",
+					name: snapshot.analyzers.structural.name,
+					status: "unavailable",
+					message: `${name} is unavailable: ${detail}. Showing indexed declarations only.`,
+				},
 			},
 		};
 	}
@@ -663,6 +712,7 @@ export async function resolveAtlasReferences(
 			line,
 			column,
 			language,
+			signal,
 		);
 		for (const delayMs of SEMANTIC_COLD_START_DELAYS_MS) {
 			if (
@@ -670,48 +720,80 @@ export async function resolveAtlasReferences(
 				locations.definitions.length > 0 ||
 				locations.references.length > 0
 			) break;
-			await new Promise((resolvePromise) => setTimeout(resolvePromise, delayMs));
+			await waitForSemanticRetry(delayMs, signal);
 			locations = await session.findLocations(
 				rootPath,
 				normalizedPath,
 				line,
 				column,
 				language,
+				signal,
 			);
 		}
 		return {
-			definitions: await convertSemanticLocations(
-				rootPath,
-				snapshot,
-				locations.definitions,
-				"definition",
-			),
-			references: await convertSemanticLocations(
-				rootPath,
-				snapshot,
-				locations.references,
-				"reference",
-			),
-			provider: {
-				kind: "lsp",
-				name: capability?.name ?? language,
-				status: "ready",
+			cacheability: "complete",
+			response: {
+				definitions: await convertSemanticLocations(
+					rootPath,
+					snapshot,
+					locations.definitions,
+					"definition",
+				),
+				references: await convertSemanticLocations(
+					rootPath,
+					snapshot,
+					locations.references,
+					"reference",
+				),
+				provider: {
+					kind: "lsp",
+					name: capability?.name ?? language,
+					status: "ready",
+				},
 			},
 		};
 	} catch (error) {
+		if (signal?.aborted) throw error;
 		const name = error instanceof AtlasSemanticUnavailableError
 			? error.capability.serverId
 			: capability?.name ?? language;
 		const message = (error instanceof Error ? error.message : String(error)).replace(/[.\s]+$/, "");
 		return {
-			definitions: indexedDeclarations,
-			references: [],
-			provider: {
-				kind: "syntax",
-				name: snapshot.analyzers.structural.name,
-				status: "unavailable",
-				message: `${name} could not provide semantic navigation: ${message}. Showing indexed declarations only.`,
+			cacheability: "transient",
+			response: {
+				definitions: indexedDeclarations,
+				references: [],
+				provider: {
+					kind: "syntax",
+					name: snapshot.analyzers.structural.name,
+					status: "unavailable",
+					message: `${name} could not provide semantic navigation: ${message}. Showing indexed declarations only.`,
+				},
 			},
 		};
 	}
+}
+
+export async function resolveAtlasReferences(
+	session: AtlasSemanticSession,
+	rootPath: string,
+	snapshot: AtlasSnapshot,
+	symbol: string,
+	filePath: string,
+	line: number,
+	column: number,
+	signal?: AbortSignal,
+): Promise<AtlasReferenceResponse> {
+	return (
+		await resolveAtlasReferencesOutcome(
+			session,
+			rootPath,
+			snapshot,
+			symbol,
+			filePath,
+			line,
+			column,
+			signal,
+		)
+	).response;
 }

@@ -5,8 +5,6 @@ import { isAbsolute, relative, resolve, sep } from "node:path";
 import {
 	buildAtlasSnapshot,
 	readAtlasSource,
-	resolveAtlasCallHierarchy,
-	resolveAtlasReferences,
 	type AtlasSemanticProviderCapability,
 	type AtlasSnapshot,
 } from "../generated/atlas.ts";
@@ -14,6 +12,7 @@ import {
 	AtlasIndexSession,
 	type AtlasIndexSessionStatus,
 } from "../generated/atlas-index-session.ts";
+import { AtlasSemanticIndexService } from "../generated/atlas-semantic-index.ts";
 import {
 	AtlasSemanticSession,
 	probeAtlasSemanticCapabilities,
@@ -67,6 +66,7 @@ async function buildIndexedAtlasSnapshot(rootPath: string): Promise<AtlasSnapsho
 			...(capability.command && {
 				source: process.env[capability.envVariable]?.trim() ? "env" : "path",
 			}),
+			...(capability.version && { version: capability.version }),
 			...(capability.reason && { reason: capability.reason }),
 		}));
 	return buildAtlasSnapshot(rootPath, { semanticProviders });
@@ -249,6 +249,17 @@ export async function startExploreServer(options: {
 		buildSnapshot: ({ rootPath: repositoryRoot }) =>
 			buildIndexedAtlasSnapshot(repositoryRoot),
 	});
+	const semanticIndexPromise = AtlasSemanticIndexService.open({
+		rootPath,
+		indexPath: indexSession.indexPath,
+		session: semanticSession,
+	});
+	void semanticIndexPromise.catch((error) => {
+		console.warn(
+			"[plannotator] Atlas semantic index unavailable:",
+			error instanceof Error ? error.message : String(error),
+		);
+	});
 	let warmedRevision = -1;
 	const warmCurrentSnapshot = async (): Promise<void> => {
 		if (stopped) return;
@@ -307,6 +318,10 @@ export async function startExploreServer(options: {
 		if (!disposePromise) {
 			disposePromise = Promise.all([
 				indexSession.dispose(),
+				semanticIndexPromise.then(
+					(semanticIndex) => semanticIndex.dispose(),
+					() => undefined,
+				),
 				semanticSession.dispose(),
 				aiRuntimePromise?.then((runtime) => runtime?.dispose()),
 			]).then(() => {});
@@ -388,18 +403,35 @@ export async function startExploreServer(options: {
 					return;
 				}
 
-				json(
-					res,
-					await resolveAtlasReferences(
-						semanticSession,
-						rootPath,
-						snapshot,
+				const generation = indexSession.getSnapshotGeneration();
+				if (!generation) {
+					json(res, indexStatus, 202);
+					return;
+				}
+				const cancellation = new AbortController();
+				const abortRequest = () => cancellation.abort();
+				const abortResponse = () => {
+					if (!res.writableEnded) cancellation.abort();
+				};
+				req.once("aborted", abortRequest);
+				res.once("close", abortResponse);
+				try {
+					const references = await (await semanticIndexPromise).resolveReferences({
+						snapshot: generation.snapshot,
+						repositoryFingerprint: generation.repositoryFingerprint,
 						symbol,
-						sourcePath,
+						filePath: sourcePath,
 						line,
 						column,
-					),
-				);
+						signal: cancellation.signal,
+					});
+					if (!cancellation.signal.aborted) json(res, references.response);
+				} catch (error) {
+					if (!cancellation.signal.aborted) throw error;
+				} finally {
+					req.off("aborted", abortRequest);
+					res.off("close", abortResponse);
+				}
 				return;
 			}
 
@@ -433,16 +465,20 @@ export async function startExploreServer(options: {
 				req.once("aborted", abortRequest);
 				res.once("close", abortResponse);
 				try {
-					const calls = await resolveAtlasCallHierarchy(
-						semanticSession,
-						rootPath,
-						snapshot,
-						sourcePath,
+					const generation = indexSession.getSnapshotGeneration();
+					if (!generation) {
+						json(res, indexStatus, 202);
+						return;
+					}
+					const calls = await (await semanticIndexPromise).resolveCalls({
+						snapshot: generation.snapshot,
+						repositoryFingerprint: generation.repositoryFingerprint,
+						filePath: sourcePath,
 						line,
 						column,
-						cancellation.signal,
-					);
-					if (!cancellation.signal.aborted) json(res, calls);
+						signal: cancellation.signal,
+					});
+					if (!cancellation.signal.aborted) json(res, calls.response);
 				} catch (error) {
 					if (!cancellation.signal.aborted) throw error;
 				} finally {

@@ -109,6 +109,10 @@ describe("AtlasIndexSession", () => {
 		sessions.push(session);
 
 		expect(session.getSnapshot()).toEqual(cached);
+		expect(session.getSnapshotGeneration()).toEqual({
+			snapshot: cached,
+			repositoryFingerprint: "fingerprint-a",
+		});
 		expect(session.getStatus()).toEqual({
 			status: "indexing",
 			phase: "checking",
@@ -163,6 +167,10 @@ describe("AtlasIndexSession", () => {
 		releaseBuild.resolve();
 		await session.waitUntilIdle();
 		expect(session.getSnapshot()).toEqual(fresh);
+		expect(session.getSnapshotGeneration()).toEqual({
+			snapshot: fresh,
+			repositoryFingerprint: "fingerprint-new",
+		});
 		expect(session.getStatus()).toEqual({
 			status: "ready",
 			phase: "ready",
@@ -225,6 +233,7 @@ describe("AtlasIndexSession", () => {
 		await session.waitUntilIdle();
 
 		expect(session.getSnapshot()).toBeUndefined();
+		expect(session.getSnapshotGeneration()).toBeUndefined();
 		expect(session.getStatus()).toEqual({
 			status: "error",
 			phase: "error",

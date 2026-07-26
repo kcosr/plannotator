@@ -119,6 +119,7 @@ GitButler users can review the whole workspace, one stack, or one branch layer. 
 plannotator explore                    # Explore the repository in the current directory
 plannotator explore ./path/to/repo     # Explore another local repository
 plannotator index ./path/to/repo       # Build the index without opening the UI
+plannotator index . --semantic         # Block until references and calls are cached
 plannotator index . --index-path /var/cache/project-atlas.sqlite3
 ```
 
@@ -132,6 +133,12 @@ stored at `.plannotator/atlas.sqlite3` inside the repository, so it can be
 committed with the source. Use `--index-path` or
 `PLANNOTATOR_ATLAS_INDEX_PATH` to place it elsewhere; relative overrides are
 resolved from the repository root.
+
+`plannotator index --semantic` is the opt-in exhaustive pass. It may take a
+long time on a large repository, writes each completed query immediately, and
+resumes from those records on the next run. Interactive lookups use the same
+cache, so a successful reference or call request is also durable across server
+restarts.
 
 ### Plan mode
 

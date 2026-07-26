@@ -10,8 +10,6 @@ import { isAbsolute, relative, resolve } from "node:path";
 import {
   buildAtlasSnapshot,
   readAtlasSource,
-  resolveAtlasCallHierarchy,
-  resolveAtlasReferences,
   type AtlasSemanticProviderCapability,
   type AtlasSnapshot,
 } from "@plannotator/shared/atlas";
@@ -19,6 +17,10 @@ import {
   AtlasIndexSession,
   type AtlasIndexSessionStatus,
 } from "@plannotator/shared/atlas-index-session";
+import {
+  AtlasSemanticIndexService,
+  type AtlasSemanticIndexProgress,
+} from "@plannotator/shared/atlas-semantic-index";
 import {
   AtlasSemanticSession,
   probeAtlasSemanticCapabilities,
@@ -73,12 +75,15 @@ export interface AtlasFeedbackResult {
 export interface IndexAtlasRepositoryOptions {
   rootPath: string;
   indexPath?: string;
+  semantic?: boolean;
+  onSemanticProgress?: (progress: AtlasSemanticIndexProgress) => void;
 }
 
 export interface IndexAtlasRepositoryResult {
   snapshot: AtlasSnapshot;
   indexPath: string;
   source: "cache" | "fresh";
+  semantic?: AtlasSemanticIndexProgress;
 }
 
 function jsonError(error: string, status: number): Response {
@@ -95,6 +100,7 @@ async function buildIndexedAtlasSnapshot(rootPath: string): Promise<AtlasSnapsho
       ...(capability.command && {
         source: process.env[capability.envVariable]?.trim() ? "env" : "path",
       }),
+      ...(capability.version && { version: capability.version }),
       ...(capability.reason && { reason: capability.reason }),
     }));
   return buildAtlasSnapshot(rootPath, { semanticProviders });
@@ -131,13 +137,31 @@ export async function indexAtlasRepository(
     await session.waitUntilIdle();
     const status = session.getStatus();
     const snapshot = session.getSnapshot();
-    if (!snapshot || status.status === "error") {
+    const generation = session.getSnapshotGeneration();
+    if (!snapshot || !generation || status.status === "error") {
       throw new Error(status.error ?? "Atlas indexing failed");
+    }
+    let semantic: AtlasSemanticIndexProgress | undefined;
+    if (options.semantic) {
+      const semanticIndex = await AtlasSemanticIndexService.open({
+        rootPath: session.rootPath,
+        indexPath: session.indexPath,
+      });
+      try {
+        semantic = await semanticIndex.indexAll({
+          snapshot: generation.snapshot,
+          repositoryFingerprint: generation.repositoryFingerprint,
+          onProgress: options.onSemanticProgress,
+        });
+      } finally {
+        await semanticIndex.dispose();
+      }
     }
     return {
       snapshot,
       indexPath: session.indexPath,
       source: status.source ?? "fresh",
+      ...(semantic && { semantic }),
     };
   } finally {
     await session.dispose();
@@ -292,6 +316,17 @@ export async function startExploreServer(
     buildSnapshot: ({ rootPath: repositoryRoot }) =>
       buildIndexedAtlasSnapshot(repositoryRoot),
   });
+  const semanticIndexPromise = AtlasSemanticIndexService.open({
+    rootPath,
+    indexPath: indexSession.indexPath,
+    session: semanticSession,
+  });
+  void semanticIndexPromise.catch((error) => {
+    console.warn(
+      "[plannotator] Atlas semantic index unavailable:",
+      error instanceof Error ? error.message : String(error),
+    );
+  });
   let warmedRevision = -1;
   const warmCurrentSnapshot = async (): Promise<void> => {
     if (stopped) return;
@@ -350,6 +385,10 @@ export async function startExploreServer(
     if (!disposePromise) {
       disposePromise = Promise.all([
         indexSession.dispose(),
+        semanticIndexPromise.then(
+          (semanticIndex) => semanticIndex.dispose(),
+          () => undefined,
+        ),
         semanticSession.dispose(),
         aiRuntimePromise?.then((runtime) => runtime?.dispose()),
       ]).then(() => {});
@@ -426,16 +465,20 @@ export async function startExploreServer(
           if (!Number.isInteger(line) || line < 1 || !Number.isInteger(column) || column < 1) {
             return jsonError("Line and column must be positive integers", 400);
           }
+          const generation = indexSession.getSnapshotGeneration();
+          if (!generation) return Response.json(indexStatus, { status: 202 });
           return Response.json(
-            await resolveAtlasReferences(
-              semanticSession,
-              rootPath,
-              snapshot,
-              symbol,
-              sourcePath,
-              line,
-              column,
-            ),
+            (
+              await (await semanticIndexPromise).resolveReferences({
+                snapshot: generation.snapshot,
+                repositoryFingerprint: generation.repositoryFingerprint,
+                symbol,
+                filePath: sourcePath,
+                line,
+                column,
+                signal: req.signal,
+              })
+            ).response,
           );
         }
 
@@ -459,17 +502,18 @@ export async function startExploreServer(
           if (!Number.isInteger(line) || line < 1 || !Number.isInteger(column) || column < 1) {
             return jsonError("Line and column must be positive integers", 400);
           }
-          return Response.json(
-            await resolveAtlasCallHierarchy(
-              semanticSession,
-              rootPath,
-              snapshot,
-              sourcePath,
+          const generation = indexSession.getSnapshotGeneration();
+          if (!generation) return Response.json(indexStatus, { status: 202 });
+          return Response.json((
+            await (await semanticIndexPromise).resolveCalls({
+              snapshot: generation.snapshot,
+              repositoryFingerprint: generation.repositoryFingerprint,
+              filePath: sourcePath,
               line,
               column,
-              req.signal,
-            ),
-          );
+              signal: req.signal,
+            })
+          ).response);
         }
 
         if (method === "POST" && url.pathname === "/api/atlas/index") {

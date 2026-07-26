@@ -32,6 +32,11 @@ export interface AtlasSnapshotBuildContext {
 	forced: boolean;
 }
 
+export interface AtlasSnapshotGeneration {
+	snapshot: AtlasSnapshot;
+	repositoryFingerprint: string;
+}
+
 export interface OpenAtlasIndexSessionOptions {
 	rootPath: string;
 	buildSnapshot: (context: AtlasSnapshotBuildContext) => Promise<AtlasSnapshot>;
@@ -141,6 +146,14 @@ export class AtlasIndexSession {
 
 	getSnapshot(): AtlasSnapshot | undefined {
 		return this.#snapshot;
+	}
+
+	getSnapshotGeneration(): AtlasSnapshotGeneration | undefined {
+		if (!this.#snapshot || !this.#snapshotFingerprint) return undefined;
+		return {
+			snapshot: this.#snapshot,
+			repositoryFingerprint: this.#snapshotFingerprint,
+		};
 	}
 
 	async waitUntilIdle(): Promise<void> {

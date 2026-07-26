@@ -493,10 +493,10 @@ if (args[0] === "sessions") {
 
   let indexArgs;
   try {
-    indexArgs = parseAtlasCommandArgs(args.slice(1));
+    indexArgs = parseAtlasCommandArgs(args.slice(1), { allowSemantic: true });
   } catch (error) {
     console.error(error instanceof Error ? error.message : String(error));
-    console.error("Usage: plannotator index [path] [--index-path <file>]");
+    console.error("Usage: plannotator index [path] [--index-path <file>] [--semantic]");
     process.exit(1);
   }
 
@@ -513,15 +513,31 @@ if (args[0] === "sessions") {
   }
 
   try {
+    let lastSemanticProgress = -1;
     const result = await indexAtlasRepository({
       rootPath,
       ...(indexArgs.indexPath && { indexPath: indexArgs.indexPath }),
+      semantic: indexArgs.semantic,
+      ...(indexArgs.semantic && {
+        onSemanticProgress: (progress) => {
+          if (progress.completed === lastSemanticProgress) return;
+          lastSemanticProgress = progress.completed;
+          const current = progress.current
+            ? ` ${progress.current.kind} ${progress.current.filePath}:${progress.current.symbol}`
+            : "";
+          process.stderr.write(
+            `\rSemantic index ${progress.completed}/${progress.total}${current}          `,
+          );
+          if (progress.completed === progress.total) process.stderr.write("\n");
+        },
+      }),
     });
     console.log(formatIndexSuccess({
       files: result.snapshot.summary.files,
       symbols: result.snapshot.summary.symbols,
       source: result.source,
       indexPath: result.indexPath,
+      ...(result.semantic && { semantic: result.semantic }),
     }));
     process.exit(0);
   } catch (error) {

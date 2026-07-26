@@ -950,7 +950,9 @@ export class AtlasSemanticSession {
 		line: number,
 		column: number,
 		language: AtlasSemanticLanguage,
+		signal?: AbortSignal,
 	): Promise<AtlasSemanticLocations> {
+		signal?.throwIfAborted();
 		if (!Number.isInteger(line) || line < 1 || !Number.isInteger(column) || column < 1) {
 			throw new Error("Atlas semantic line and column must be positive 1-based integers");
 		}
@@ -958,6 +960,7 @@ export class AtlasSemanticSession {
 		const client = await this.#clientFor(source.rootPath, language);
 		let result!: AtlasSemanticLocations;
 		const operation = async (): Promise<void> => {
+			signal?.throwIfAborted();
 			const uri = pathToFileURL(source.sourcePath).href;
 			client.connection.sendNotification("textDocument/didOpen", {
 				textDocument: {
@@ -967,14 +970,22 @@ export class AtlasSemanticSession {
 					text: readFileSync(source.sourcePath, "utf8"),
 				},
 			});
+			const cancellation = new CancellationTokenSource();
+			const cancelRequest = () => cancellation.cancel();
+			signal?.addEventListener("abort", cancelRequest, { once: true });
 			try {
+				signal?.throwIfAborted();
 				const position = { line: line - 1, character: column - 1 };
 				const textDocument = { uri };
 				const [definitions, references] = await Promise.all([
 					retryContentModified(() => {
 						const request = client.connection.sendRequest<
 							LspLocation | LspLocationLink | Array<LspLocation | LspLocationLink> | null
-						>("textDocument/definition", { textDocument, position });
+						>(
+							"textDocument/definition",
+							{ textDocument, position },
+							cancellation.token,
+						);
 						return withTimeout(
 							guardProcess(client, request),
 							`${client.definition.id} definition lookup`,
@@ -989,6 +1000,7 @@ export class AtlasSemanticSession {
 								position,
 								context: { includeDeclaration: false },
 							},
+							cancellation.token,
 						);
 						return withTimeout(
 							guardProcess(client, request),
@@ -1002,6 +1014,8 @@ export class AtlasSemanticSession {
 					references: normalizeLocations(references, source.rootPath),
 				};
 			} finally {
+				signal?.removeEventListener("abort", cancelRequest);
+				cancellation.dispose();
 				client.connection.sendNotification("textDocument/didClose", {
 					textDocument: { uri },
 				});
@@ -1014,6 +1028,7 @@ export class AtlasSemanticSession {
 			await queued;
 			return result;
 		} catch (error) {
+			if (signal?.aborted) throw error;
 			if (!isContentModifiedError(error) && this.#clients.delete(client.key)) {
 				await stopClient(client, this.#options.shutdownTimeoutMs);
 			}

@@ -8,6 +8,7 @@
     "./atlas-index-session": "./atlas-index-session.ts",
     "./atlas-repository-fingerprint": "./atlas-repository-fingerprint.ts",
     "./atlas-semantic": "./atlas-semantic.ts",
+    "./atlas-semantic-index": "./atlas-semantic-index.ts",
     "./atlas-snapshot-cache": "./atlas-snapshot-cache.ts",
     "./atlas-structure": "./atlas-structure.ts",
     "./annotatable": "./annotatable.ts",
