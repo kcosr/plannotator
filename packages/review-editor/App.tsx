@@ -107,7 +107,7 @@ import { GuideScreen } from './components/guide/GuideScreen';
 import { DEMO_GUIDE_ID } from './demoGuide';
 import { buildPRArtifacts } from './utils/prArtifacts';
 import { ReviewAtlasSurface } from './components/ReviewAtlasSurface';
-import type { ReviewAtlasMode } from './components/ReviewAtlasSurface';
+import type { ReviewAtlasFocusTarget, ReviewAtlasMode } from './components/ReviewAtlasSurface';
 import type { AtlasSourceAnnotationDraft, AtlasWorkspaceSourceTarget } from '@plannotator/atlas';
 
 declare const __APP_VERSION__: string;
@@ -254,6 +254,7 @@ const ReviewApp: React.FC = () => {
   const [atlasNavigationTarget, setAtlasNavigationTarget] = useState<
     (AtlasWorkspaceSourceTarget & { token: number }) | undefined
   >();
+  const [atlasFocusTarget, setAtlasFocusTarget] = useState<ReviewAtlasFocusTarget>();
   // Guided Review screen takeover — file tree + center dock hidden (dock stays
   // mounted, just CSS-hidden; see the dock wrapper below), right sidebar untouched.
   const [guideOpen, setGuideOpen] = useState(false);
@@ -511,6 +512,24 @@ const ReviewApp: React.FC = () => {
     needsInitialDiffPanel.current = false;
   }, [dockApi, files]);
 
+  const selectScopeFile = useCallback((filePath: string) => {
+    const fileIndex = files.findIndex(candidate => candidate.path === filePath);
+    if (fileIndex !== -1) setActiveFileIndex(fileIndex);
+    setAtlasFocusTarget((current) => ({
+      path: filePath,
+      kind: 'file',
+      token: (current?.token ?? 0) + 1,
+    }));
+  }, [files]);
+
+  const focusScopeFolder = useCallback((path: string) => {
+    setAtlasFocusTarget((current) => ({
+      path,
+      kind: 'directory',
+      token: (current?.token ?? 0) + 1,
+    }));
+  }, []);
+
   const handleRevealSearchMatch = useCallback((match: ReviewSearchMatch) => {
     // Respect the surface the user is in. When the all-files panel is active,
     // reveal IN PLACE — AllFilesCodeView scrolls to + highlights the active
@@ -519,11 +538,15 @@ const ReviewApp: React.FC = () => {
     // behavior). Unconditionally activating the all-files panel here would
     // teleport the user out of their tab just for typing a query (reveal also
     // fires on first-match auto-activation, not only on explicit clicks).
+    if (reviewSurface === 'scope') {
+      selectScopeFile(match.filePath);
+      return;
+    }
     if (dockApi && isAllFilesActiveRef.current) {
       return;
     }
     openDiffFile(match.filePath);
-  }, [dockApi, openDiffFile]);
+  }, [dockApi, openDiffFile, reviewSurface, selectScopeFile]);
 
   const {
     searchQuery,
@@ -1236,7 +1259,7 @@ const ReviewApp: React.FC = () => {
   // Global keyboard shortcuts
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (reviewSurface !== 'diff') {
+      if (reviewSurface === 'codebase') {
         if ((e.metaKey || e.ctrlKey) && e.key === '.' && !isTypingTarget(e.target)) {
           e.preventDefault();
           if (reviewSidebar.isOpen) reviewSidebar.close();
@@ -1290,7 +1313,7 @@ const ReviewApp: React.FC = () => {
       // same hasSearchableFiles condition as the header badge so the shortcut
       // and badge agree on availability.
       if ((e.metaKey || e.ctrlKey) && e.shiftKey && !e.altKey && e.key.toLowerCase() === 'g' && !isTypingTarget(e.target)) {
-        if (aiUIEnabled && hasSearchableFiles) {
+        if (reviewSurface === 'diff' && aiUIEnabled && hasSearchableFiles) {
           e.preventDefault();
           setGuideOpen(prev => !prev);
         }
@@ -1626,6 +1649,16 @@ const ReviewApp: React.FC = () => {
     if (!file) return;
     openDiffFile(file.path);
   }, [files, openDiffFile]);
+
+  const handleSidebarFileSelect = useCallback((index: number) => {
+    const file = files[index];
+    if (!file) return;
+    if (reviewSurface === 'scope') {
+      selectScopeFile(file.path);
+      return;
+    }
+    openDiffFile(file.path);
+  }, [files, openDiffFile, reviewSurface, selectScopeFile]);
 
   // Legacy file switch (used by handleSelectAnnotation, diff switch, etc.)
   const handleFileSwitch = useCallback((index: number) => {
@@ -2021,11 +2054,11 @@ const ReviewApp: React.FC = () => {
       ? `worktree:${activeWorktreePath}:commit:${sha}`
       : `commit:${sha}`;
     if (fullDiffType === diffType) {
-      openAllFilesPanel();
+      if (reviewSurface === 'diff') openAllFilesPanel();
       return;
     }
     void fetchDiffSwitch(fullDiffType);
-  }, [activeWorktreePath, diffType, fetchDiffSwitch, openAllFilesPanel]);
+  }, [activeWorktreePath, diffType, fetchDiffSwitch, openAllFilesPanel, reviewSurface]);
 
   // The Commits-view session machine (log + poll + HEAD auto-select + center
   // veil) lives in the hook so its invariants stay in one file; App supplies
@@ -2874,7 +2907,7 @@ const ReviewApp: React.FC = () => {
         {/* Header */}
         <header className="py-1 flex flex-col min-[480px]:flex-row items-stretch min-[480px]:items-center min-[480px]:justify-between gap-1 min-[480px]:gap-0 px-2 lg:px-4 border-b border-border/50 bg-card/50 backdrop-blur-xl z-50">
           <div className="min-w-0 flex flex-1 items-center gap-2 lg:gap-3">
-            {reviewSurface === 'diff' && shouldShowFileTree && (
+            {reviewSurface !== 'codebase' && shouldShowFileTree && (
               <>
                 <button
                   onClick={() => setIsFileTreeOpen(prev => !prev)}
@@ -3345,15 +3378,15 @@ const ReviewApp: React.FC = () => {
 
         {/* Main content */}
         <div className={`min-h-0 flex-1 flex overflow-hidden ${isResizing ? 'select-none' : ''}`}>
-          {reviewSurface === 'diff' && !guideOpen && shouldShowFileTree && isFileTreeOpen && sectionsAvailable && panelView === 'sections' && (
+          {reviewSurface !== 'codebase' && !guideOpen && shouldShowFileTree && isFileTreeOpen && sectionsAvailable && panelView === 'sections' && (
             <div className="contents group/sidebar">
               <SectionsPanel
                 files={files}
                 sections={sections!}
                 width={fileTreeResize.width}
-                activeFileIndex={isAllFilesActive || isSemanticDiffActive || isPROverviewActive ? -1 : activeFileIndex}
-                scrollHighlightIndex={isAllFilesActive && allFilesVisibleFile ? files.findIndex(f => f.path === allFilesVisibleFile) : undefined}
-                onSelectFile={handleFilePreview}
+                activeFileIndex={reviewSurface === 'scope' ? activeFileIndex : isAllFilesActive || isSemanticDiffActive || isPROverviewActive ? -1 : activeFileIndex}
+                scrollHighlightIndex={reviewSurface === 'diff' && isAllFilesActive && allFilesVisibleFile ? files.findIndex(f => f.path === allFilesVisibleFile) : undefined}
+                onSelectFile={handleSidebarFileSelect}
                 onDoubleClickFile={handleFilePinned}
                 enableKeyboardNav={!showExportModal && hasSearchableFiles}
                 annotations={diffAnnotations}
@@ -3374,10 +3407,16 @@ const ReviewApp: React.FC = () => {
                 recentCommits={gitContext?.recentCommits}
                 onSelectPanelView={handlePanelViewSelect}
                 showCommitsOption={commitsCapable}
-                onSelectAllFiles={openAllFilesPanel}
-                isAllFilesActive={isAllFilesActive}
-                onSelectSemanticDiff={() => openSemanticDiffPanel()}
-                isSemanticDiffActive={isSemanticDiffActive}
+                onSelectAllFiles={() => {
+                  setReviewSurface('diff');
+                  openAllFilesPanel();
+                }}
+                isAllFilesActive={reviewSurface === 'diff' && isAllFilesActive}
+                onSelectSemanticDiff={() => {
+                  setReviewSurface('diff');
+                  openSemanticDiffPanel();
+                }}
+                isSemanticDiffActive={reviewSurface === 'diff' && isSemanticDiffActive}
                 semanticDiffAvailable={semanticDiffAvailable}
                 onCopyRawDiff={handleCopyDiff}
                 canCopyRawDiff={!!diffData?.rawPatch}
@@ -3399,7 +3438,7 @@ const ReviewApp: React.FC = () => {
               <ResizeHandle {...fileTreeResize.handleProps} className="z-10" side="left" hideHoverTrack tooltip={RESIZE_HANDLE_TOOLTIP} onCollapse={() => setIsFileTreeOpen(false)} />
             </div>
           )}
-          {reviewSurface === 'diff' && !guideOpen && shouldShowFileTree && isFileTreeOpen && showCommitsPanel && (
+          {reviewSurface !== 'codebase' && !guideOpen && shouldShowFileTree && isFileTreeOpen && showCommitsPanel && (
             <div className="contents group/sidebar">
               <CommitsPanel
                 width={fileTreeResize.width}
@@ -3419,26 +3458,39 @@ const ReviewApp: React.FC = () => {
               <ResizeHandle {...fileTreeResize.handleProps} className="z-10" side="left" hideHoverTrack tooltip={RESIZE_HANDLE_TOOLTIP} onCollapse={() => setIsFileTreeOpen(false)} />
             </div>
           )}
-          {reviewSurface === 'diff' && !guideOpen && shouldShowFileTree && isFileTreeOpen && !(sectionsAvailable && panelView === 'sections') && !showCommitsPanel && (
+          {reviewSurface !== 'codebase' && !guideOpen && shouldShowFileTree && isFileTreeOpen && !(sectionsAvailable && panelView === 'sections') && !showCommitsPanel && (
             <div className="contents group/sidebar">
               <FileTree
                 files={files}
                 activeFileIndex={activeFileIndex}
-                onSelectPROverview={openPROverviewPanel}
-                isPROverviewActive={isPROverviewActive}
+                onSelectPROverview={() => {
+                  setReviewSurface('diff');
+                  openPROverviewPanel();
+                }}
+                isPROverviewActive={reviewSurface === 'diff' && isPROverviewActive}
                 prOverviewNumber={prMetadata ? mrNumberLabel : undefined}
                 prOverviewTitle={prMetadata?.title}
-                onSelectPRArtifacts={prMetadata ? openPRArtifactsPanel : undefined}
-                isPRArtifactsActive={isPRArtifactsActive}
+                onSelectPRArtifacts={prMetadata ? () => {
+                  setReviewSurface('diff');
+                  openPRArtifactsPanel();
+                } : undefined}
+                isPRArtifactsActive={reviewSurface === 'diff' && isPRArtifactsActive}
                 prArtifactCount={prMetadata ? prArtifacts.length : undefined}
-                onSelectSemanticDiff={() => openSemanticDiffPanel()}
-                isSemanticDiffActive={isSemanticDiffActive}
+                onSelectSemanticDiff={() => {
+                  setReviewSurface('diff');
+                  openSemanticDiffPanel();
+                }}
+                isSemanticDiffActive={reviewSurface === 'diff' && isSemanticDiffActive}
                 semanticDiffAvailable={semanticDiffAvailable}
-                onSelectAllFiles={openAllFilesPanel}
-                isAllFilesActive={isAllFilesActive}
-                scrollHighlightIndex={isAllFilesActive && allFilesVisibleFile ? files.findIndex(f => f.path === allFilesVisibleFile) : undefined}
-                onSelectFile={handleFilePreview}
+                onSelectAllFiles={() => {
+                  setReviewSurface('diff');
+                  openAllFilesPanel();
+                }}
+                isAllFilesActive={reviewSurface === 'diff' && isAllFilesActive}
+                scrollHighlightIndex={reviewSurface === 'diff' && isAllFilesActive && allFilesVisibleFile ? files.findIndex(f => f.path === allFilesVisibleFile) : undefined}
+                onSelectFile={handleSidebarFileSelect}
                 onDoubleClickFile={handleFilePinned}
+                onSelectFolder={reviewSurface === 'scope' ? focusScopeFolder : undefined}
                 annotations={diffAnnotations}
                 viewedFiles={viewedFiles}
                 onToggleViewed={handleToggleViewed}
@@ -3525,6 +3577,7 @@ const ReviewApp: React.FC = () => {
               annotations={allAnnotations}
               aiAvailable={aiAvailable}
               navigationTarget={atlasNavigationTarget}
+              focusTarget={atlasFocusTarget}
               onAddAnnotation={handleAddAtlasAnnotation}
               onUpdateAnnotation={(id, text) => handleEditAnnotation(id, text)}
               onDeleteAnnotation={handleDeleteAnnotation}

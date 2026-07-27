@@ -394,6 +394,7 @@ export interface AtlasWorkspaceProps {
   codeFilter: CodeFilter;
   relationshipsOpen: boolean;
   query: string;
+  showRepositorySidebar: boolean;
   sidebarOpen: boolean;
   sourceTarget?: AtlasWorkspaceSourceTarget;
   canNavigateSourceBack: boolean;
@@ -439,6 +440,7 @@ export function AtlasWorkspace({
   codeFilter,
   relationshipsOpen,
   query,
+  showRepositorySidebar,
   sidebarOpen,
   sourceTarget,
   canNavigateSourceBack,
@@ -494,35 +496,39 @@ export function AtlasWorkspace({
   }
 
   return (
-    <div className={`atlas-shell${sidebarOpen ? '' : ' is-sidebar-closed'}`}>
-      <aside className="atlas-sidebar">
-        <div className="atlas-sidebar-header">
-          <span>Repository</span>
-          <span>{filteredFileCount} files</span>
-        </div>
-        <DirectoryTree
-          nodes={nodes}
-          codeFilter={codeFilter}
-          selectedId={selectedId}
-          focusedRootId={focusedRoot.id}
-          onSelect={onNavigateNode}
-          onFocus={onNavigateNode}
-        />
-        <div className="atlas-sidebar-summary">
-          <span>{formatNumber(filteredLines(root, codeFilter))} lines</span>
-          <span>{formatBytes(filteredBytes(root, codeFilter))}</span>
-          <span>{filteredLanguageCount} languages</span>
-        </div>
-      </aside>
+    <div className={`atlas-shell${showRepositorySidebar && sidebarOpen ? '' : ' is-sidebar-closed'}`}>
+      {showRepositorySidebar && (
+        <aside className="atlas-sidebar">
+          <div className="atlas-sidebar-header">
+            <span>Repository</span>
+            <span>{filteredFileCount} files</span>
+          </div>
+          <DirectoryTree
+            nodes={nodes}
+            codeFilter={codeFilter}
+            selectedId={selectedId}
+            focusedRootId={focusedRoot.id}
+            onSelect={onNavigateNode}
+            onFocus={onNavigateNode}
+          />
+          <div className="atlas-sidebar-summary">
+            <span>{formatNumber(filteredLines(root, codeFilter))} lines</span>
+            <span>{formatBytes(filteredBytes(root, codeFilter))}</span>
+            <span>{filteredLanguageCount} languages</span>
+          </div>
+        </aside>
+      )}
 
       <section className="atlas-workspace">
         <div className="atlas-toolbar">
-          <button
-            type="button"
-            className="atlas-icon-button"
-            onClick={() => onSidebarOpenChange(!sidebarOpen)}
-            title={sidebarOpen ? 'Hide repository tree' : 'Show repository tree'}
-          >{sidebarOpen ? <PanelLeftClose size={15} /> : <PanelLeftOpen size={15} />}</button>
+          {showRepositorySidebar && (
+            <button
+              type="button"
+              className="atlas-icon-button"
+              onClick={() => onSidebarOpenChange(!sidebarOpen)}
+              title={sidebarOpen ? 'Hide repository tree' : 'Show repository tree'}
+            >{sidebarOpen ? <PanelLeftClose size={15} /> : <PanelLeftOpen size={15} />}</button>
+          )}
           <CodeFilterControl value={codeFilter} onChange={onCodeFilterChange} />
           {view === 'overview' && (
             <button
@@ -1021,6 +1027,7 @@ export default function AtlasApp() {
         codeFilter={codeFilter}
         relationshipsOpen={relationshipsOpen}
         query={query}
+        showRepositorySidebar
         sidebarOpen={sidebarOpen}
         sourceTarget={currentSourceTarget}
         canNavigateSourceBack={sourceHistoryIndex > 0}

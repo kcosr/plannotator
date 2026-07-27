@@ -48,6 +48,12 @@ import {
 
 export type ReviewAtlasMode = 'scope' | 'codebase';
 
+export interface ReviewAtlasFocusTarget {
+  path: string;
+  kind: 'file' | 'directory';
+  token: number;
+}
+
 interface ReviewAtlasSurfaceProps {
   mode: ReviewAtlasMode;
   repositoryKey: string;
@@ -57,6 +63,7 @@ interface ReviewAtlasSurfaceProps {
   annotations: CodeAnnotation[];
   aiAvailable: boolean;
   navigationTarget?: AtlasWorkspaceSourceTarget & { token: number };
+  focusTarget?: ReviewAtlasFocusTarget;
   onAddAnnotation: (draft: AtlasSourceAnnotationDraft) => void;
   onUpdateAnnotation: (id: string, text: string) => void;
   onDeleteAnnotation: (id: string) => void;
@@ -348,6 +355,7 @@ export function ReviewAtlasSurface({
   annotations,
   aiAvailable,
   navigationTarget,
+  focusTarget,
   onAddAnnotation,
   onUpdateAnnotation,
   onDeleteAnnotation,
@@ -565,6 +573,25 @@ export function ReviewAtlasSurface({
     openSource(navigationTarget);
   }, [navigationTarget, nodes, openSource]);
 
+  const handledFocusTokenRef = useRef<number | null>(null);
+  useEffect(() => {
+    if (
+      mode !== 'scope'
+      || !focusTarget
+      || handledFocusTokenRef.current === focusTarget.token
+    ) return;
+    const node = nodes.find((entry) => (
+      entry.path === focusTarget.path
+      && (focusTarget.kind === 'file' ? entry.kind === 'file' : entry.kind !== 'file')
+    ));
+    if (!node) return;
+    handledFocusTokenRef.current = focusTarget.token;
+    setSelectedId(node.id);
+    if (node.kind !== 'file') setFocusedRootId(node.id);
+    setSelectedHotspotId(null);
+    setImpactState({ kind: 'idle' });
+  }, [focusTarget, mode, nodes]);
+
   const navigateSourceHistory = useCallback((index: number) => {
     const target = sourceHistory[index];
     if (!target) return;
@@ -704,6 +731,7 @@ export function ReviewAtlasSurface({
             codeFilter={codeFilter}
             relationshipsOpen={relationshipsOpen}
             query={query}
+            showRepositorySidebar={mode === 'codebase'}
             sidebarOpen={sidebarOpen}
             sourceTarget={currentSourceTarget}
             canNavigateSourceBack={sourceHistoryIndex > 0}

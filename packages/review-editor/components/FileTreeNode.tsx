@@ -7,6 +7,7 @@ interface FileTreeNodeProps {
   node: TreeNode;
   expandedFolders: Set<string>;
   onToggleFolder: (path: string) => void;
+  onSelectFolder?: (path: string) => void;
   activeFileIndex: number;
   onSelectFile: (index: number) => void;
   onDoubleClickFile?: (index: number) => void;
@@ -49,6 +50,7 @@ export const FileTreeNodeItem: React.FC<FileTreeNodeProps> = ({
   node,
   expandedFolders,
   onToggleFolder,
+  onSelectFolder,
   activeFileIndex,
   onSelectFile,
   onDoubleClickFile,
@@ -75,7 +77,10 @@ export const FileTreeNodeItem: React.FC<FileTreeNodeProps> = ({
     return (
       <>
         <button
-          onClick={() => onToggleFolder(node.path)}
+          onClick={() => {
+            onToggleFolder(node.path);
+            onSelectFolder?.(node.path);
+          }}
           className="w-full flex items-center gap-1.5 py-1 px-2 text-[11px] text-muted-foreground hover:text-foreground hover:bg-muted/50 transition-colors rounded-sm"
           style={{ paddingLeft }}
         >
@@ -106,6 +111,7 @@ export const FileTreeNodeItem: React.FC<FileTreeNodeProps> = ({
             node={child}
             expandedFolders={expandedFolders}
             onToggleFolder={onToggleFolder}
+            onSelectFolder={onSelectFolder}
             activeFileIndex={activeFileIndex}
             onSelectFile={onSelectFile}
             onDoubleClickFile={onDoubleClickFile}
