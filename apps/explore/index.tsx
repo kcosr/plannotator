@@ -2,6 +2,7 @@ import React from 'react';
 import ReactDOM from 'react-dom/client';
 import AtlasApp from '@plannotator/atlas';
 import { AtlasWorkerPoolProvider } from '@plannotator/atlas/worker-pool';
+import './styles.css';
 import '@plannotator/atlas/styles';
 
 const root = document.getElementById('root');

@@ -3344,7 +3344,7 @@ const ReviewApp: React.FC = () => {
         </header>
 
         {/* Main content */}
-        <div className={`flex-1 flex overflow-hidden ${isResizing ? 'select-none' : ''}`}>
+        <div className={`min-h-0 flex-1 flex overflow-hidden ${isResizing ? 'select-none' : ''}`}>
           {reviewSurface === 'diff' && !guideOpen && shouldShowFileTree && isFileTreeOpen && sectionsAvailable && panelView === 'sections' && (
             <div className="contents group/sidebar">
               <SectionsPanel
@@ -3509,7 +3509,7 @@ const ReviewApp: React.FC = () => {
             </div>
           )}
 
-          <div className={`flex-1 min-w-0 overflow-hidden ${guideVisible || reviewSurface === 'diff' ? 'hidden' : ''}`}>
+          <div className={`h-full min-h-0 flex-1 min-w-0 overflow-hidden ${guideVisible || reviewSurface === 'diff' ? 'hidden' : ''}`}>
             <ReviewAtlasSurface
               mode={reviewSurface === 'diff' ? lastAtlasModeRef.current : reviewSurface}
               repositoryKey={

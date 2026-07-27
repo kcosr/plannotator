@@ -1,7 +1,7 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { lstat, readdir, readFile, realpath } from "node:fs/promises";
-import { extname, join, relative, resolve, sep } from "node:path";
+import { lstat, open, readdir, readFile, realpath } from "node:fs/promises";
+import { join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import { createAtlasRepositoryFingerprint } from "./atlas-snapshot-cache";
 
@@ -11,32 +11,7 @@ const DEFAULT_MAX_FILES = 20_000;
 const DEFAULT_MAX_FILE_BYTES = 2 * 1024 * 1024;
 const DEFAULT_MAX_TOTAL_BYTES = 128 * 1024 * 1024;
 const MAX_GIT_OUTPUT_BYTES = 32 * 1024 * 1024;
-
-const SOURCE_EXTENSIONS = new Set([
-	".c",
-	".cc",
-	".cjs",
-	".cpp",
-	".cts",
-	".cxx",
-	".go",
-	".h",
-	".hh",
-	".hpp",
-	".hxx",
-	".java",
-	".js",
-	".jsx",
-	".mjs",
-	".mts",
-	".py",
-	".pyi",
-	".rake",
-	".rb",
-	".rs",
-	".ts",
-	".tsx",
-]);
+const FINGERPRINT_SAMPLE_BYTES = 8 * 1024;
 
 const EXCLUDED_DIRECTORIES = new Set([
 	".cache",
@@ -62,8 +37,6 @@ const EXCLUDED_DIRECTORIES = new Set([
 ]);
 
 const EXCLUDED_FILE_PATTERNS = [
-	/(?:^|\/)(?:package-lock|npm-shrinkwrap|yarn|pnpm-lock|bun)\.lock$/i,
-	/(?:^|\/)(?:composer\.lock|cargo\.lock|go\.sum)$/i,
 	/\.min\.(?:js|css)$/i,
 	/\.map$/i,
 	/\.generated\.[^/]+$/i,
@@ -92,16 +65,15 @@ function normalizeRepositoryPath(filePath: string): string {
 	return filePath.split(sep).join("/").replace(/^\.\/+/, "");
 }
 
-function isSourceCandidate(filePath: string): boolean {
+function isRepositoryCandidate(filePath: string): boolean {
 	const normalized = normalizeRepositoryPath(filePath);
 	return (
-		SOURCE_EXTENSIONS.has(extname(normalized).toLowerCase()) &&
 		!normalized.split("/").some((segment) => EXCLUDED_DIRECTORIES.has(segment)) &&
 		!EXCLUDED_FILE_PATTERNS.some((pattern) => pattern.test(normalized))
 	);
 }
 
-async function gitSourceCandidates(
+async function gitRepositoryCandidates(
 	rootPath: string,
 	limit: number,
 ): Promise<string[] | null> {
@@ -128,7 +100,7 @@ async function gitSourceCandidates(
 			.split("\0")
 			.filter(Boolean)
 			.map(normalizeRepositoryPath)
-			.filter(isSourceCandidate)
+			.filter(isRepositoryCandidate)
 			.slice(0, limit)
 			.sort();
 	} catch {
@@ -136,7 +108,7 @@ async function gitSourceCandidates(
 	}
 }
 
-async function filesystemSourceCandidates(
+async function filesystemRepositoryCandidates(
 	rootPath: string,
 	limit: number,
 ): Promise<string[]> {
@@ -161,7 +133,7 @@ async function filesystemSourceCandidates(
 				!repositoryPath.split("/").some((segment) => EXCLUDED_DIRECTORIES.has(segment))
 			) {
 				pending.push(absolutePath);
-			} else if (entry.isFile() && isSourceCandidate(repositoryPath)) {
+			} else if (entry.isFile() && isRepositoryCandidate(repositoryPath)) {
 				results.push(repositoryPath);
 				if (results.length >= limit) break;
 			}
@@ -170,11 +142,38 @@ async function filesystemSourceCandidates(
 	return results.sort();
 }
 
+async function sampleFileFingerprint(
+	absolutePath: string,
+	fileBytes: number,
+): Promise<string> {
+	const handle = await open(absolutePath, "r");
+	try {
+		const firstLength = Math.min(fileBytes, FINGERPRINT_SAMPLE_BYTES);
+		const lastLength = Math.min(
+			Math.max(0, fileBytes - firstLength),
+			FINGERPRINT_SAMPLE_BYTES,
+		);
+		const first = Buffer.alloc(firstLength);
+		const last = Buffer.alloc(lastLength);
+		if (firstLength > 0) await handle.read(first, 0, firstLength, 0);
+		if (lastLength > 0) {
+			await handle.read(last, 0, lastLength, fileBytes - lastLength);
+		}
+		return createHash("sha256")
+			.update(`sample:${fileBytes}:`)
+			.update(first)
+			.update(last)
+			.digest("hex");
+	} finally {
+		await handle.close();
+	}
+}
+
 /**
- * Hash the bounded set of source files that can affect an Atlas snapshot.
+ * Hash the bounded set of repository files that can affect an Atlas snapshot.
  *
  * Git repositories honor ignore rules. Other directories use a symlink-free
- * traversal with the same source extension and generated-directory exclusions.
+ * traversal with the same generated-path exclusions.
  */
 export async function collectAtlasRepositoryFingerprint(
 	rootPath: string,
@@ -184,14 +183,15 @@ export async function collectAtlasRepositoryFingerprint(
 	const maxFiles = positiveInteger(options.maxFiles, DEFAULT_MAX_FILES);
 	const maxFileBytes = positiveInteger(options.maxFileBytes, DEFAULT_MAX_FILE_BYTES);
 	const maxTotalBytes = positiveInteger(options.maxTotalBytes, DEFAULT_MAX_TOTAL_BYTES);
-	const discovered = await gitSourceCandidates(canonicalRoot, maxFiles + 1) ??
-		await filesystemSourceCandidates(canonicalRoot, maxFiles + 1);
+	const discovered = await gitRepositoryCandidates(canonicalRoot, maxFiles + 1) ??
+		await filesystemRepositoryCandidates(canonicalRoot, maxFiles + 1);
 	const candidates = discovered.slice(0, maxFiles);
 	const fingerprintEntries: Array<{ path: string; contentFingerprint: string }> = [{
 		path: "\0atlas-fingerprint-options",
 		contentFingerprint: `${maxFiles}:${maxFileBytes}:${maxTotalBytes}`,
 	}];
 	let bytes = 0;
+	let fullyHashedBytes = 0;
 	let files = 0;
 	let truncated = discovered.length > maxFiles;
 
@@ -205,24 +205,30 @@ export async function collectAtlasRepositoryFingerprint(
 		}
 		if (
 			fileStats.isSymbolicLink() ||
-			!fileStats.isFile() ||
-			fileStats.size > maxFileBytes
+			!fileStats.isFile()
 		) continue;
-		if (bytes + fileStats.size > maxTotalBytes) {
-			truncated = true;
-			break;
-		}
-		let content: Buffer;
+
+		const hashEntireFile =
+			fileStats.size <= maxFileBytes &&
+			fullyHashedBytes + fileStats.size <= maxTotalBytes;
+		let contentFingerprint: string;
 		try {
-			content = await readFile(absolutePath);
+			if (hashEntireFile) {
+				const content = await readFile(absolutePath);
+				fullyHashedBytes += content.length;
+				contentFingerprint = createHash("sha256").update(content).digest("hex");
+			} else {
+				truncated = true;
+				contentFingerprint = await sampleFileFingerprint(absolutePath, fileStats.size);
+			}
 		} catch {
 			continue;
 		}
-		bytes += content.length;
+		bytes += fileStats.size;
 		files += 1;
 		fingerprintEntries.push({
 			path: repositoryPath,
-			contentFingerprint: createHash("sha256").update(content).digest("hex"),
+			contentFingerprint,
 		});
 	}
 	fingerprintEntries.push({

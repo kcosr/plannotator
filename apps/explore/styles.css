@@ -1,0 +1,27 @@
+@import "@fontsource-variable/inter";
+@import "@fontsource-variable/geist-mono";
+@import "tailwindcss";
+@source "../../packages/ui/components/ai/*.tsx";
+@source "../../packages/ui/components/OverlayScrollArea.tsx";
+@source "../../packages/ui/components/SparklesIcon.tsx";
+@import "@plannotator/ui/theme";
+
+:root {
+  font-family: var(--font-sans, Inter, system-ui, sans-serif);
+  color: var(--foreground);
+  background: var(--background);
+  font-synthesis: none;
+}
+
+* { box-sizing: border-box; }
+html, body, #root { width: 100%; height: 100%; margin: 0; overflow: hidden; }
+button, input, select { font: inherit; letter-spacing: 0; }
+button { color: inherit; }
+
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after {
+    scroll-behavior: auto !important;
+    animation-duration: .01ms !important;
+    transition-duration: .01ms !important;
+  }
+}

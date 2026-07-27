@@ -30,7 +30,15 @@ const LANGUAGE_COLORS: Record<string, string> = {
   unknown: '#64748b',
 };
 
-function metricValue(node: AtlasNode, filter: CodeFilter, metric: SizeMetric): number {
+export function blockMapNodeWeight(
+  node: AtlasNode,
+  filter: CodeFilter,
+  metric: SizeMetric,
+  overlay?: BlockMapOverlay,
+): number {
+  if (overlay?.sizeByChanges) {
+    return Math.max(1, blockMapChangedLines(overlay.nodes.get(node.id)?.changes));
+  }
   return Math.max(1, filteredMetric(node, filter, metric));
 }
 
@@ -102,6 +110,8 @@ export interface BlockMapOverlay {
   nodes: ReadonlyMap<string, BlockMapNodeOverlay>;
   /** Fade nodes with no overlay entry while preserving their spatial context. */
   dimUnspecified?: boolean;
+  /** Lay out blocks by changed lines instead of the selected repository metric. */
+  sizeByChanges?: boolean;
   /** Show compact additions/deletions labels when a block has enough room. */
   showMetrics?: boolean;
 }
@@ -190,6 +200,7 @@ function createBlocks(
   metric: SizeMetric,
   width: number,
   height: number,
+  overlay?: BlockMapOverlay,
   depth = 0,
   offsetX = 0,
   offsetY = 0,
@@ -198,7 +209,11 @@ function createBlocks(
     .map((id) => byId.get(id))
     .filter((node): node is AtlasNode => node != null && nodeMatchesFilter(node, filter));
   const rects = squarify(
-    children.map((node) => ({ item: node, id: node.id, value: metricValue(node, filter, metric) })),
+    children.map((node) => ({
+      item: node,
+      id: node.id,
+      value: blockMapNodeWeight(node, filter, metric, overlay),
+    })),
     width,
     height,
   );
@@ -223,6 +238,7 @@ function createBlocks(
         metric,
         Math.max(0, rect.width - inset * 2),
         Math.max(0, rect.height - header - inset),
+        overlay,
         depth + 1,
         x + inset,
         y + header,
@@ -249,8 +265,8 @@ export const BlockMap = memo(function BlockMap({
   const { ref, width, height } = useElementSize<HTMLDivElement>();
   const byId = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
   const blocks = useMemo(
-    () => createBlocks(root, byId, codeFilter, sizeMetric, width, height),
-    [root, byId, codeFilter, sizeMetric, width, height],
+    () => createBlocks(root, byId, codeFilter, sizeMetric, width, height, overlay),
+    [root, byId, codeFilter, sizeMetric, width, height, overlay],
   );
   const maxColorValueByDepth = useMemo(() => {
     const values = new Map<number, number>();
@@ -343,8 +359,15 @@ export const BlockMap = memo(function BlockMap({
           </button>
         );
       })}
-      <div className={`atlas-color-legend atlas-color-legend--${colorMetric}`}>
-        {colorMetric === 'language' ? (
+      <div className={`atlas-color-legend atlas-color-legend--${overlay ? 'changes' : colorMetric}`}>
+        {overlay ? (
+          <>
+            <strong>Diff heat</strong>
+            <span>Low</span>
+            <i className="atlas-color-scale" />
+            <span>High</span>
+          </>
+        ) : colorMetric === 'language' ? (
           visibleLanguages.map((language) => (
             <span key={language}>
               <i style={{ '--legend-color': LANGUAGE_COLORS[language.toLowerCase()] ?? LANGUAGE_COLORS.unknown } as React.CSSProperties} />

@@ -26,7 +26,7 @@ afterEach(() => {
 });
 
 describe("collectAtlasRepositoryFingerprint", () => {
-	test("tracks supported source content and ignores unrelated files", async () => {
+	test("tracks repository text content and ignores excluded paths", async () => {
 		const root = repository();
 		mkdirSync(join(root, "src"));
 		mkdirSync(join(root, ".plannotator"));
@@ -40,10 +40,9 @@ describe("collectAtlasRepositoryFingerprint", () => {
 		);
 
 		const initial = await collectAtlasRepositoryFingerprint(root);
-		expect(initial.files).toBe(1);
+		expect(initial.files).toBe(2);
 		expect(initial.truncated).toBe(false);
 
-		writeFileSync(join(root, "README.md"), "second\n");
 		writeFileSync(join(root, ".plannotator", "generated.ts"), "export const cache = 2;\n");
 		writeFileSync(
 			join(root, "node_modules", "package", "index.ts"),
@@ -52,9 +51,14 @@ describe("collectAtlasRepositoryFingerprint", () => {
 		expect((await collectAtlasRepositoryFingerprint(root)).fingerprint)
 			.toBe(initial.fingerprint);
 
-		writeFileSync(join(root, "src", "main.ts"), "export const value = 2;\n");
+		writeFileSync(join(root, "README.md"), "second\n");
 		expect((await collectAtlasRepositoryFingerprint(root)).fingerprint)
 			.not.toBe(initial.fingerprint);
+
+		const afterReadme = await collectAtlasRepositoryFingerprint(root);
+		writeFileSync(join(root, "src", "main.ts"), "export const value = 2;\n");
+		expect((await collectAtlasRepositoryFingerprint(root)).fingerprint)
+			.not.toBe(afterReadme.fingerprint);
 	});
 
 	test("does not follow symlinks outside the repository", async () => {
@@ -79,7 +83,7 @@ describe("collectAtlasRepositoryFingerprint", () => {
 		writeFileSync(join(root, ".plannotator", "generated.ts"), "export const cache = 1;\n");
 
 		const initial = await collectAtlasRepositoryFingerprint(root);
-		expect(initial.files).toBe(1);
+		expect(initial.files).toBe(2);
 		writeFileSync(join(root, "ignored.ts"), "export const ignored = 2;\n");
 		writeFileSync(join(root, ".plannotator", "generated.ts"), "export const cache = 2;\n");
 		expect((await collectAtlasRepositoryFingerprint(root)).fingerprint)
@@ -101,5 +105,19 @@ describe("collectAtlasRepositoryFingerprint", () => {
 		expect(twoFiles.files).toBe(2);
 		expect(twoFiles.truncated).toBe(false);
 		expect(oneFile.fingerprint).not.toBe(twoFiles.fingerprint);
+	});
+
+	test("tracks oversized files with a bounded content sample", async () => {
+		const root = repository();
+		writeFileSync(join(root, "large.txt"), "prefix\nmiddle\nsuffix\n");
+
+		const initial = await collectAtlasRepositoryFingerprint(root, { maxFileBytes: 4 });
+		expect(initial.files).toBe(1);
+		expect(initial.bytes).toBe(21);
+		expect(initial.truncated).toBe(true);
+
+		writeFileSync(join(root, "large.txt"), "prefix\nchanged\nsuffix\n");
+		const changed = await collectAtlasRepositoryFingerprint(root, { maxFileBytes: 4 });
+		expect(changed.fingerprint).not.toBe(initial.fingerprint);
 	});
 });

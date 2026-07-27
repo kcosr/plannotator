@@ -1,4 +1,5 @@
 import { execFile } from "node:child_process";
+import { createReadStream } from "node:fs";
 import { lstat, readdir, readFile, realpath, stat } from "node:fs/promises";
 import { basename, dirname, extname, join, posix, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
@@ -19,7 +20,7 @@ import { classifyJavaScriptTestRanges } from "./atlas-test-classification-js";
 
 const execFileAsync = promisify(execFile);
 
-export const ATLAS_SNAPSHOT_VERSION = 4;
+export const ATLAS_SNAPSHOT_VERSION = 5;
 
 export type AtlasNodeKind = "root" | "directory" | "file";
 
@@ -149,13 +150,15 @@ type FileAnalysis = {
 type AcceptedFile = {
 	path: string;
 	bytes: number;
-	content: string;
+	content: string | null;
+	lines: number;
 };
 
 const DEFAULT_MAX_FILES = 20_000;
 const DEFAULT_MAX_FILE_BYTES = 2 * 1024 * 1024;
 const DEFAULT_MAX_TOTAL_BYTES = 128 * 1024 * 1024;
 const MAX_GIT_OUTPUT_BYTES = 32 * 1024 * 1024;
+const MAX_METADATA_SCAN_BYTES = 64 * 1024 * 1024;
 
 const LANGUAGE_DEFINITIONS: LanguageDefinition[] = [
 	{ language: "typescript", extensions: [".ts", ".tsx", ".mts", ".cts"] },
@@ -167,7 +170,22 @@ const LANGUAGE_DEFINITIONS: LanguageDefinition[] = [
 	{ language: "cpp", extensions: [".cc", ".cpp", ".cxx", ".hh", ".hpp", ".hxx"] },
 	{ language: "c", extensions: [".c", ".h"] },
 	{ language: "ruby", extensions: [".rb", ".rake"] },
+	{ language: "shell", extensions: [".sh"] },
 ];
+
+const DISPLAY_LANGUAGE_BY_EXTENSION = new Map([
+	[".css", "css"],
+	[".htm", "html"],
+	[".html", "html"],
+	[".json", "json"],
+	[".md", "markdown"],
+	[".mdx", "markdown"],
+	[".toml", "toml"],
+	[".txt", "text"],
+	[".xml", "xml"],
+	[".yaml", "yaml"],
+	[".yml", "yaml"],
+]);
 
 const EXTENSION_TO_LANGUAGE = new Map(
 	LANGUAGE_DEFINITIONS.flatMap(({ language, extensions }) =>
@@ -204,8 +222,6 @@ const EXCLUDED_DIRECTORY_NAMES = new Set([
 ]);
 
 const EXCLUDED_FILE_PATTERNS = [
-	/(?:^|\/)(?:package-lock|npm-shrinkwrap|yarn|pnpm-lock|bun)\.lock$/i,
-	/(?:^|\/)(?:composer\.lock|cargo\.lock|go\.sum)$/i,
 	/\.min\.(?:js|css)$/i,
 	/\.map$/i,
 	/\.generated\.[^/]+$/i,
@@ -257,6 +273,16 @@ function languageForPath(filePath: string): { language: string; extension: strin
 	return language ? { language, extension } : null;
 }
 
+function displayLanguageForPath(filePath: string): { language: string; extension: string } {
+	const analyzed = languageForPath(filePath);
+	if (analyzed) return analyzed;
+	const extension = extname(filePath).toLowerCase();
+	return {
+		language: DISPLAY_LANGUAGE_BY_EXTENSION.get(extension) ?? "text",
+		extension,
+	};
+}
+
 async function listGitFiles(rootPath: string, maxFiles: number): Promise<string[] | null> {
 	try {
 		const { stdout } = await execFileAsync(
@@ -281,7 +307,7 @@ async function listGitFiles(rootPath: string, maxFiles: number): Promise<string[
 			.split("\0")
 			.filter(Boolean)
 			.map(normalizeRepositoryPath)
-			.filter((filePath) => !isExcludedPath(filePath) && languageForPath(filePath) !== null)
+			.filter((filePath) => !isExcludedPath(filePath))
 			.slice(0, maxFiles);
 	} catch {
 		return null;
@@ -309,7 +335,7 @@ async function listFilesystemFiles(rootPath: string, maxFiles: number): Promise<
 			if (isExcludedPath(repositoryPath) || entry.isSymbolicLink()) continue;
 			if (entry.isDirectory()) {
 				pending.push(absolutePath);
-			} else if (entry.isFile() && languageForPath(repositoryPath) !== null) {
+			} else if (entry.isFile()) {
 				results.push(repositoryPath);
 				if (results.length >= maxFiles) break;
 			}
@@ -340,6 +366,55 @@ function countLines(content: string): number {
 	if (content.length === 0) return 0;
 	const newlines = content.match(/\r\n|\r|\n/g)?.length ?? 0;
 	return newlines + (/(?:\r\n|\r|\n)$/.test(content) ? 0 : 1);
+}
+
+async function inspectTextMetadata(
+	absolutePath: string,
+	fileBytes: number,
+): Promise<{ binary: boolean; lines: number }> {
+	const chunks: Buffer[] = [];
+	let sampledBytes = 0;
+	let lineBreaks = 0;
+	let previousWasCarriageReturn = false;
+	let endsWithLineBreak = false;
+	let scannedBytes = 0;
+
+	for await (const value of createReadStream(absolutePath)) {
+		const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
+		scannedBytes += chunk.length;
+		if (sampledBytes < 8_192) {
+			const sample = chunk.subarray(0, Math.min(chunk.length, 8_192 - sampledBytes));
+			chunks.push(sample);
+			sampledBytes += sample.length;
+			if (sampledBytes >= Math.min(fileBytes, 8_192) && isProbablyBinary(Buffer.concat(chunks))) {
+				return { binary: true, lines: 0 };
+			}
+		}
+		if (scannedBytes > MAX_METADATA_SCAN_BYTES) {
+			return { binary: false, lines: 0 };
+		}
+		for (const byte of chunk) {
+			if (byte === 13) {
+				lineBreaks += 1;
+				previousWasCarriageReturn = true;
+				endsWithLineBreak = true;
+			} else if (byte === 10) {
+				if (!previousWasCarriageReturn) lineBreaks += 1;
+				previousWasCarriageReturn = false;
+				endsWithLineBreak = true;
+			} else {
+				previousWasCarriageReturn = false;
+				endsWithLineBreak = false;
+			}
+		}
+	}
+
+	const sample = Buffer.concat(chunks);
+	if (isProbablyBinary(sample)) return { binary: true, lines: 0 };
+	return {
+		binary: false,
+		lines: fileBytes === 0 ? 0 : lineBreaks + (endsWithLineBreak ? 0 : 1),
+	};
 }
 
 function stripComments(content: string, language: string): string {
@@ -454,7 +529,16 @@ function analyzeOutline(
 	outline: StructuralFileOutline | undefined,
 ): FileAnalysis | null {
 	const identified = languageForPath(filePath);
-	if (!identified) return null;
+	if (!identified) {
+		const display = displayLanguageForPath(filePath);
+		return {
+			...display,
+			lines: countLines(content),
+			complexity: 0,
+			symbols: [],
+			imports: [],
+		};
+	}
 	const lines = content.split(/\r\n|\r|\n/);
 	const symbols: FileAnalysis["symbols"] = [];
 	const imports = new Map<string, number>();
@@ -796,8 +880,7 @@ export async function buildAtlasSnapshot(
 		if (
 			!normalizedPath ||
 			normalizedPath.startsWith("../") ||
-			isExcludedPath(normalizedPath) ||
-			!languageForPath(normalizedPath)
+			isExcludedPath(normalizedPath)
 		) {
 			skippedFiles += 1;
 			continue;
@@ -811,13 +894,34 @@ export async function buildAtlasSnapshot(
 			skippedFiles += 1;
 			continue;
 		}
-		if (fileStats.isSymbolicLink() || !fileStats.isFile() || fileStats.size > maxFileBytes) {
+		if (fileStats.isSymbolicLink() || !fileStats.isFile()) {
 			skippedFiles += 1;
 			continue;
 		}
-		if (totalReadBytes + fileStats.size > maxTotalBytes) {
+
+		const canReadContent =
+			fileStats.size <= maxFileBytes &&
+			totalReadBytes + fileStats.size <= maxTotalBytes;
+		if (!canReadContent) {
 			truncated = true;
-			break;
+			let metadata;
+			try {
+				metadata = await inspectTextMetadata(absolutePath, fileStats.size);
+			} catch {
+				skippedFiles += 1;
+				continue;
+			}
+			if (metadata.binary) {
+				skippedFiles += 1;
+				continue;
+			}
+			acceptedFiles.push({
+				path: normalizedPath,
+				bytes: fileStats.size,
+				content: null,
+				lines: metadata.lines,
+			});
+			continue;
 		}
 
 		let bytes: Buffer;
@@ -834,26 +938,31 @@ export async function buildAtlasSnapshot(
 		}
 
 		const content = bytes.toString("utf8");
-		if (looksGenerated(content)) {
-			skippedFiles += 1;
-			continue;
-		}
-		acceptedFiles.push({ path: normalizedPath, bytes: bytes.length, content });
+		acceptedFiles.push({
+			path: normalizedPath,
+			bytes: bytes.length,
+			content: looksGenerated(content) ? null : content,
+			lines: countLines(content),
+		});
 	}
 
 	const structure = await analyzeAtlasStructure(
 		resolvedRoot,
-		acceptedFiles.map((file) => file.path),
+		acceptedFiles
+			.filter((file) => file.content !== null && languageForPath(file.path) !== null)
+			.map((file) => file.path),
 	);
 	const testRangesByPath = classifyRustRepositoryTestRanges(
 		acceptedFiles
-			.filter((file) => languageForPath(file.path)?.language === "rust")
+			.filter((file): file is AcceptedFile & { content: string } =>
+				file.content !== null && languageForPath(file.path)?.language === "rust")
 			.map((file) => ({
 				...file,
 				outline: structure.files.get(file.path),
 			})),
 	);
 	for (const file of acceptedFiles) {
+		if (file.content === null) continue;
 		const language = languageForPath(file.path)?.language;
 		if (language === "typescript" || language === "javascript") {
 			testRangesByPath.set(
@@ -895,11 +1004,19 @@ export async function buildAtlasSnapshot(
 	}
 
 	for (const accepted of acceptedFiles) {
-		const analysis = analyzeOutline(
-			accepted.path,
-			accepted.content,
-			structure.files.get(accepted.path),
-		);
+		const analysis = accepted.content === null
+			? {
+				...displayLanguageForPath(accepted.path),
+				lines: accepted.lines,
+				complexity: 0,
+				symbols: [],
+				imports: [],
+			}
+			: analyzeOutline(
+				accepted.path,
+				accepted.content,
+				structure.files.get(accepted.path),
+			);
 		if (!analysis) {
 			skippedFiles += 1;
 			continue;
@@ -908,12 +1025,14 @@ export async function buildAtlasSnapshot(
 		const id = nodeId("file", accepted.path);
 		const parentId = ensureDirectoryNodes(accepted.path, rootNode, nodesById);
 		const testRanges = testRangesByPath.get(accepted.path) ?? [];
-		const classifiedTestMetrics = testMetrics(
-			accepted.content,
-			analysis.language,
-			analysis.complexity,
-			testRanges,
-		);
+		const classifiedTestMetrics = accepted.content === null
+			? { bytes: 0, lines: 0, complexity: 0 }
+			: testMetrics(
+				accepted.content,
+				analysis.language,
+				analysis.complexity,
+				testRanges,
+			);
 		const symbols: AtlasSymbol[] = analysis.symbols.map((symbol) => ({
 			...symbol,
 			id: symbolId(id, symbol.kind, symbol.name, symbol.line),

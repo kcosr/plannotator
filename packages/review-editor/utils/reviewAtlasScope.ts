@@ -138,7 +138,6 @@ export function buildReviewAtlasScope(
           changedLines: metrics.changedLines,
           changedFiles: metrics.changedFiles,
         },
-        intensity: metrics.density,
         directChange: metrics.directChangedFiles > 0,
       },
     ]),
@@ -150,6 +149,7 @@ export function buildReviewAtlasScope(
     overlay: {
       nodes: overlayNodes,
       dimUnspecified: true,
+      sizeByChanges: true,
       showMetrics: true,
     },
     changedFileNodeIds: new Set(Object.values(aggregation.fileNodeIds)),

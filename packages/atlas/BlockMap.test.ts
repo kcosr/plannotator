@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'bun:test';
 import {
   blockMapChangedLines,
+  blockMapNodeWeight,
   blockMapOverlayMaximum,
   resolveBlockMapNodeOverlay,
   type BlockMapOverlay,
@@ -66,5 +67,37 @@ describe('BlockMap overlays', () => {
       deletions: -5,
       changedLines: Number.POSITIVE_INFINITY,
     })).toBe(0);
+  });
+
+  test('sizes Scope blocks by changed lines while preserving unchanged context', () => {
+    const changed = {
+      id: 'file:scripts/check.sh',
+      kind: 'file' as const,
+      path: 'scripts/check.sh',
+      name: 'check.sh',
+      parentId: 'dir:scripts',
+      childIds: [],
+      depth: 2,
+      language: 'shell',
+      extension: '.sh',
+      bytes: 4_000,
+      lines: 300,
+      complexity: 0,
+      testBytes: 0,
+      testLines: 0,
+      testComplexity: 0,
+      testRanges: [],
+      symbols: [],
+    };
+    const overlay: BlockMapOverlay = {
+      nodes: new Map([
+        [changed.id, { changes: { additions: 45, deletions: 5, changedLines: 50 } }],
+      ]),
+      sizeByChanges: true,
+    };
+
+    expect(blockMapNodeWeight(changed, 'all', 'lines', overlay)).toBe(50);
+    expect(blockMapNodeWeight({ ...changed, id: 'file:README.md' }, 'all', 'lines', overlay)).toBe(1);
+    expect(blockMapNodeWeight(changed, 'all', 'lines')).toBe(300);
   });
 });

@@ -120,8 +120,11 @@ const SOURCE_LANGUAGES: Record<string, string> = {
 	".hpp": "cpp",
 	".hxx": "cpp",
 	".java": "java",
+	".json": "json",
 	".js": "javascript",
 	".jsx": "javascript",
+	".md": "markdown",
+	".mdx": "markdown",
 	".mjs": "javascript",
 	".mts": "typescript",
 	".py": "python",
@@ -129,8 +132,14 @@ const SOURCE_LANGUAGES: Record<string, string> = {
 	".rake": "ruby",
 	".rb": "ruby",
 	".rs": "rust",
+	".sh": "shell",
+	".toml": "toml",
 	".ts": "typescript",
 	".tsx": "typescript",
+	".txt": "text",
+	".xml": "xml",
+	".yaml": "yaml",
+	".yml": "yaml",
 };
 
 function normalizedRelativePath(filePath: string): string {

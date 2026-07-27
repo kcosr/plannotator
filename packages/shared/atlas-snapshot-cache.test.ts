@@ -32,7 +32,7 @@ function temporaryDirectory(): string {
 
 function snapshot(_rootPath: string): AtlasSnapshot {
 	return {
-		version: 4,
+		version: 5,
 		rootName: "repository",
 		rootId: "root",
 		generatedAt: "2026-07-26T12:00:00.000Z",
@@ -67,7 +67,7 @@ function validateSnapshot(value: unknown): value is AtlasSnapshot {
 	return (
 		typeof value === "object" &&
 		value !== null &&
-		(value as { version?: unknown }).version === 4
+		(value as { version?: unknown }).version === 5
 	);
 }
 
@@ -114,7 +114,7 @@ describe("AtlasSnapshotCache", () => {
 		const cache = await cacheAt(join(directory, "cache", "atlas.sqlite3"));
 		const key = {
 			repositoryFingerprint: "sha256:repository-a",
-			snapshotVersion: 4,
+			snapshotVersion: 5,
 		};
 		const value = snapshot(root);
 
@@ -125,7 +125,7 @@ describe("AtlasSnapshotCache", () => {
 			repositoryFingerprint: key.repositoryFingerprint,
 			createdAt: expect.any(String),
 		});
-		expect(cache.getLatest(4, validateSnapshot)).toEqual({
+		expect(cache.getLatest(5, validateSnapshot)).toEqual({
 			snapshot: value,
 			repositoryFingerprint: key.repositoryFingerprint,
 			createdAt: expect.any(String),
@@ -134,7 +134,7 @@ describe("AtlasSnapshotCache", () => {
 			...key,
 			repositoryFingerprint: "sha256:repository-b",
 		}, validateSnapshot)).toBeNull();
-		expect(cache.get({ ...key, snapshotVersion: 5 }, validateSnapshot)).toBeNull();
+		expect(cache.get({ ...key, snapshotVersion: 4 }, validateSnapshot)).toBeNull();
 	});
 
 	test("replaces stale fingerprints for the same repository and snapshot version", async () => {
@@ -144,7 +144,7 @@ describe("AtlasSnapshotCache", () => {
 		const cache = await cacheAt(join(directory, "atlas.sqlite3"));
 		const firstKey = {
 			repositoryFingerprint: "sha256:first",
-			snapshotVersion: 4,
+			snapshotVersion: 5,
 		};
 		const secondKey = { ...firstKey, repositoryFingerprint: "sha256:second" };
 
@@ -152,7 +152,7 @@ describe("AtlasSnapshotCache", () => {
 		expect(cache.set(secondKey, snapshot(root))).toBe(true);
 		expect(cache.get(firstKey, validateSnapshot)).toBeNull();
 		expect(cache.get(secondKey, validateSnapshot)?.snapshot).toEqual(snapshot(root));
-		expect(cache.getLatest(4, validateSnapshot)?.repositoryFingerprint)
+		expect(cache.getLatest(5, validateSnapshot)?.repositoryFingerprint)
 			.toBe(secondKey.repositoryFingerprint);
 	});
 
@@ -163,11 +163,11 @@ describe("AtlasSnapshotCache", () => {
 		const cache = await cacheAt(join(directory, "atlas.sqlite3"));
 		const key = {
 			repositoryFingerprint: "sha256:repository",
-			snapshotVersion: 4,
+			snapshotVersion: 5,
 		};
 		expect(cache.set(key, snapshot(root))).toBe(true);
 		expect(cache.get(key, (_value): _value is AtlasSnapshot => false)).toBeNull();
-		expect(cache.getLatest(4, validateSnapshot)).toBeNull();
+		expect(cache.getLatest(5, validateSnapshot)).toBeNull();
 	});
 
 	test("rejects mismatched snapshot metadata", async () => {
@@ -177,12 +177,12 @@ describe("AtlasSnapshotCache", () => {
 		const cache = await cacheAt(join(directory, "atlas.sqlite3"));
 		const key = {
 			repositoryFingerprint: "sha256:repository",
-			snapshotVersion: 4,
+			snapshotVersion: 5,
 		};
 
 		expect(cache.set(key, {
 			...snapshot(root),
-			version: 5,
+			version: 4,
 		} as unknown as AtlasSnapshot)).toBe(false);
 		expect(cache.set({ ...key, repositoryFingerprint: "" }, snapshot(root))).toBe(false);
 		expect(cache.get(key, validateSnapshot)).toBeNull();
@@ -196,7 +196,7 @@ describe("AtlasSnapshotCache", () => {
 		const cache = await cacheAt(databasePath);
 		const key = {
 			repositoryFingerprint: "sha256:repository",
-			snapshotVersion: 4,
+			snapshotVersion: 5,
 		};
 		expect(cache.set(key, snapshot(root))).toBe(true);
 
@@ -212,7 +212,7 @@ describe("AtlasSnapshotCache", () => {
 		], { encoding: "utf8" });
 		expect(mutation.status).toBe(0);
 		expect(cache.get(key, validateSnapshot)).toBeNull();
-		expect(cache.getLatest(4, validateSnapshot)).toBeNull();
+		expect(cache.getLatest(5, validateSnapshot)).toBeNull();
 	});
 
 	test("creates a database Node can read after Bun writes it", async () => {
@@ -223,7 +223,7 @@ describe("AtlasSnapshotCache", () => {
 		const cache = await cacheAt(databasePath);
 		const key = {
 			repositoryFingerprint: "sha256:repository",
-			snapshotVersion: 4,
+			snapshotVersion: 5,
 		};
 		expect(cache.set(key, snapshot(root))).toBe(true);
 		expect(existsSync(`${databasePath}-wal`)).toBe(false);
@@ -258,7 +258,7 @@ describe("AtlasSnapshotCache", () => {
 		const cache = await cacheAt(databasePath);
 		const key = {
 			repositoryFingerprint: "sha256:repository",
-			snapshotVersion: 4,
+			snapshotVersion: 5,
 		};
 
 		expect(cache.available).toBe(false);
@@ -287,7 +287,7 @@ describe("AtlasSnapshotCache", () => {
 		const cache = await cacheAt(databasePath);
 		const key = {
 			repositoryFingerprint: "sha256:repository",
-			snapshotVersion: 4,
+			snapshotVersion: 5,
 		};
 		expect(cache.available).toBe(true);
 		expect(cache.set(key, snapshot(root))).toBe(true);
