@@ -389,11 +389,12 @@ button { color: inherit; }
 .atlas-inline-search { width: 180px; height: 25px; }
 .atlas-inline-search > span { white-space: nowrap; font: 9px var(--font-mono); }
 .atlas-source-code { min-width: 0; min-height: 0; position: relative; overflow: hidden; }
-.atlas-pierre-file, .atlas-source-code > div, .atlas-source-code diffs-container { height: 100% !important; }
+.atlas-pierre-file, .atlas-source-code diffs-container { height: 100% !important; }
 diffs-container { --diffs-dark-bg: var(--background); --diffs-light-bg: var(--background); --diffs-dark: var(--foreground); --diffs-light: var(--foreground); }
 .atlas-source-inspector { min-width: 0; min-height: 0; overflow: auto; background: var(--sidebar); }
 .atlas-source-compose {
   position: absolute; z-index: 30; left: 50%; bottom: 14px; width: min(520px, calc(100% - 28px));
+  height: auto; max-height: min(240px, calc(100% - 28px)); overflow: auto;
   transform: translateX(-50%); padding: 8px; border: 1px solid var(--border);
   border-radius: 6px; background: var(--card); box-shadow: 0 10px 35px rgb(0 0 0 / .3);
 }

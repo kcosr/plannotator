@@ -588,6 +588,15 @@ describe("review-core", () => {
     expect(newFileContents.newContent).toBe("brand new\n");
   });
 
+  test("git context reports the repository root when the runtime cwd is implicit", async () => {
+    const repoDir = initRepo();
+    const runtime = makeRuntime(repoDir);
+
+    const context = await getGitContext(runtime);
+
+    expect(context.cwd).toBe(repoDir);
+  });
+
   test("file content lookup refuses oversized working-tree files", async () => {
     const repoDir = initRepo();
     const runtime = makeRuntime(repoDir);

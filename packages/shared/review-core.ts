@@ -627,7 +627,7 @@ export async function getGitContext(
         remoteGroupLabel: "Remote",
       },
     },
-    cwd,
+    cwd: currentTreePath ?? cwd,
     vcsType: "git",
     recentCommits,
   };
