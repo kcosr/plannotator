@@ -9,7 +9,10 @@ import {
 	AtlasSemanticRepositoryChangedError,
 	type AtlasSemanticIndexProgress,
 } from "./atlas-semantic-index";
-import { collectAtlasRepositoryFingerprint } from "./atlas-repository-fingerprint";
+import {
+	AtlasRepositoryFingerprintCache,
+	collectAtlasRepositoryFingerprint,
+} from "./atlas-repository-fingerprint";
 import type {
 	AtlasSemanticCallHierarchy,
 	AtlasSemanticCapability,
@@ -302,12 +305,23 @@ describe("AtlasSemanticIndexService", () => {
 				excludedPaths: [data.indexPath],
 			})
 		).fingerprint;
+		const fingerprintCache = new AtlasRepositoryFingerprintCache();
 		const session = new FakeSession();
 		const service = await AtlasSemanticIndexService.open({
 			rootPath: data.rootPath,
 			indexPath: data.indexPath,
 			session: asSession(session),
 			capabilities: capabilities(),
+			verifyRepositoryFingerprint: async (expectedFingerprint, signal) => {
+				const current = await collectAtlasRepositoryFingerprint(data.rootPath, {
+					excludedPaths: [data.indexPath],
+					contentCache: fingerprintCache,
+					signal,
+				});
+				if (current.fingerprint !== expectedFingerprint) {
+					throw new AtlasSemanticRepositoryChangedError();
+				}
+			},
 		});
 		const input = {
 			snapshot: data.snapshot,

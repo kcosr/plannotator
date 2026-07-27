@@ -25,7 +25,6 @@ import {
 	type AtlasSemanticCapability,
 	type AtlasSemanticLanguage,
 } from "./atlas-semantic";
-import { collectAtlasRepositoryFingerprint } from "./atlas-repository-fingerprint";
 
 export const ATLAS_SEMANTIC_INDEX_SCHEMA_VERSION = 2;
 
@@ -112,7 +111,7 @@ export interface OpenAtlasSemanticIndexServiceOptions {
 	session?: AtlasSemanticSession;
 	capabilities?: Record<AtlasSemanticLanguage, AtlasSemanticCapability>;
 	semanticSessionOptions?: ConstructorParameters<typeof AtlasSemanticSession>[0];
-	verifyRepositoryFingerprint?: (
+	verifyRepositoryFingerprint: (
 		expectedFingerprint: string,
 		signal?: AbortSignal,
 	) => Promise<void>;
@@ -985,24 +984,13 @@ export class AtlasSemanticIndexService {
 		]);
 		const session = options.session ??
 			new AtlasSemanticSession(options.semanticSessionOptions);
-		const verifyRepositoryFingerprint =
-			options.verifyRepositoryFingerprint ??
-			(async (expectedFingerprint, signal) => {
-				const current = await collectAtlasRepositoryFingerprint(rootPath, {
-					excludedPaths: [options.indexPath],
-					signal,
-				});
-				if (current.fingerprint !== expectedFingerprint) {
-					throw new AtlasSemanticRepositoryChangedError();
-				}
-			});
 		return new AtlasSemanticIndexService(
 			rootPath,
 			store,
 			session,
 			options.session === undefined,
 			capabilities,
-			verifyRepositoryFingerprint,
+			options.verifyRepositoryFingerprint,
 		);
 	}
 

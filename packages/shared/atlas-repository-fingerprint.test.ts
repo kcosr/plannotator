@@ -3,13 +3,18 @@ import {
 	mkdirSync,
 	mkdtempSync,
 	rmSync,
+	statSync,
 	symlinkSync,
+	utimesSync,
 	writeFileSync,
 } from "node:fs";
 import { spawnSync } from "node:child_process";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { collectAtlasRepositoryFingerprint } from "./atlas-repository-fingerprint";
+import {
+	AtlasRepositoryFingerprintCache,
+	collectAtlasRepositoryFingerprint,
+} from "./atlas-repository-fingerprint";
 
 const temporaryDirectories: string[] = [];
 
@@ -138,6 +143,32 @@ describe("collectAtlasRepositoryFingerprint", () => {
 		await expect(
 			collectAtlasRepositoryFingerprint(root, { signal: controller.signal }),
 		).rejects.toThrow("cancel fingerprint");
+	});
+
+	test("reuses unchanged content hashes and invalidates changed files", async () => {
+		const root = repository();
+		const firstPath = join(root, "a.ts");
+		writeFileSync(firstPath, "export const a = 1;\n");
+		writeFileSync(join(root, "b.ts"), "export const b = 1;\n");
+		const cache = new AtlasRepositoryFingerprintCache();
+
+		const initial = await collectAtlasRepositoryFingerprint(root, {
+			contentCache: cache,
+		});
+		expect(cache.getStats()).toEqual({ entries: 2, hits: 0, misses: 2 });
+		expect((await collectAtlasRepositoryFingerprint(root, {
+			contentCache: cache,
+		})).fingerprint).toBe(initial.fingerprint);
+		expect(cache.getStats()).toEqual({ entries: 2, hits: 2, misses: 2 });
+
+		const originalTimes = statSync(firstPath);
+		writeFileSync(firstPath, "export const a = 2;\n");
+		utimesSync(firstPath, originalTimes.atime, originalTimes.mtime);
+		const changed = await collectAtlasRepositoryFingerprint(root, {
+			contentCache: cache,
+		});
+		expect(changed.fingerprint).not.toBe(initial.fingerprint);
+		expect(cache.getStats()).toEqual({ entries: 2, hits: 3, misses: 3 });
 	});
 
 	test("streams complete oversized files into the fingerprint", async () => {

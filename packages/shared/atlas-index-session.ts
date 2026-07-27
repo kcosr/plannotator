@@ -5,6 +5,7 @@ import {
 	type AtlasSnapshot,
 } from "./atlas";
 import {
+	AtlasRepositoryFingerprintCache,
 	collectAtlasRepositoryFingerprint,
 	type AtlasRepositoryFingerprintOptions,
 } from "./atlas-repository-fingerprint";
@@ -96,6 +97,7 @@ export class AtlasIndexSession {
 		this.rootPath = rootPath;
 		this.#buildSnapshot = options.buildSnapshot;
 		this.#cache = cache;
+		const fingerprintCache = new AtlasRepositoryFingerprintCache();
 		this.#collectFingerprint = options.collectFingerprint ??
 			(async (repositoryRoot, signal) =>
 				(await collectAtlasRepositoryFingerprint(
@@ -103,6 +105,7 @@ export class AtlasIndexSession {
 					{
 						...options.fingerprintOptions,
 						signal,
+						contentCache: fingerprintCache,
 						excludedPaths: [
 							...(options.fingerprintOptions?.excludedPaths ?? []),
 							cache.indexPath,
@@ -166,6 +169,22 @@ export class AtlasIndexSession {
 			snapshot: this.#snapshot,
 			repositoryFingerprint: this.#snapshotFingerprint,
 		};
+	}
+
+	async verifyRepositoryFingerprint(
+		expectedFingerprint: string,
+		signal?: AbortSignal,
+	): Promise<void> {
+		if (this.#disposed) {
+			throw new Error("Atlas index session is disposed");
+		}
+		const currentFingerprint = await this.#collectFingerprint(
+			this.rootPath,
+			signal,
+		);
+		if (currentFingerprint !== expectedFingerprint) {
+			throw new Error("Repository changed since the Atlas index was generated");
+		}
 	}
 
 	async waitUntilIdle(): Promise<void> {

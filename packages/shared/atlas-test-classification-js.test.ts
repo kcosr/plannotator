@@ -123,6 +123,58 @@ describe("classifyJavaScriptTestRanges", () => {
 		]);
 	});
 
+	test("supports tagged-template each tables with interpolations", () => {
+		const lines = [
+			"import { test } from 'vitest';",
+			"test.each`",
+			"  left | right | total",
+			"  ${1} | ${2}  | ${3}",
+			"`('adds $left and $right', ({ left, right, total }) => {",
+			"  expect(left + right).toBe(total);",
+			"});",
+		];
+		const fileOutline = outline("src/feature.ts", lines, [{
+			line: 1,
+			isImport: true,
+		}]);
+
+		expect(classifyJavaScriptTestRanges(
+			"src/feature.ts",
+			lines.join("\n"),
+			fileOutline,
+		)).toEqual([{
+			startLine: 2,
+			endLine: 7,
+			reason: "js-test-call",
+			confidence: "semantic",
+		}]);
+	});
+
+	test("masks regex literals without treating division as regex", () => {
+		const lines = [
+			"import { test } from 'vitest';",
+			"test('regex', () => {",
+			"  const matcher = /https?:\\/\\/[^/]+\\/[()](foo|bar\\))/gi;",
+			"  const ratio = total / (count + 1) / scale;",
+			"  expect(matcher.test(String(ratio))).toBe(false);",
+			"});",
+			"test('next', () => {});",
+		];
+		const fileOutline = outline("src/feature.ts", lines, [{
+			line: 1,
+			isImport: true,
+		}]);
+
+		expect(classifyJavaScriptTestRanges(
+			"src/feature.ts",
+			lines.join("\n"),
+			fileOutline,
+		)).toEqual([
+			expect.objectContaining({ startLine: 2, endLine: 6 }),
+			expect.objectContaining({ startLine: 7, endLine: 7 }),
+		]);
+	});
+
 	test("ignores test-like calls inside comments and strings", () => {
 		const lines = [
 			"import { test } from 'vitest';",

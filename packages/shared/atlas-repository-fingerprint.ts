@@ -1,6 +1,6 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { createReadStream } from "node:fs";
+import { createReadStream, type BigIntStats } from "node:fs";
 import { lstat, readdir, realpath } from "node:fs/promises";
 import { join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
@@ -50,6 +50,7 @@ export interface AtlasRepositoryFingerprintOptions {
 	maxTotalBytes?: number;
 	excludedPaths?: string[];
 	signal?: AbortSignal;
+	contentCache?: AtlasRepositoryFingerprintCache;
 }
 
 export interface AtlasRepositoryFingerprint {
@@ -57,6 +58,56 @@ export interface AtlasRepositoryFingerprint {
 	files: number;
 	bytes: number;
 	truncated: boolean;
+}
+
+interface CachedContentFingerprint {
+	signature: string;
+	fingerprint: string;
+}
+
+export interface AtlasRepositoryFingerprintCacheStats {
+	entries: number;
+	hits: number;
+	misses: number;
+}
+
+/**
+ * Reuses file-content hashes while stable identity metadata is unchanged.
+ *
+ * The cache is scoped to one Atlas index session. Candidate discovery and
+ * metadata validation still run for every generation check, so additions,
+ * removals, replacements, and in-place writes invalidate the cached result.
+ */
+export class AtlasRepositoryFingerprintCache {
+	#entries = new Map<string, CachedContentFingerprint>();
+	#hits = 0;
+	#misses = 0;
+
+	get(cacheKey: string, signature: string): string | undefined {
+		const entry = this.#entries.get(cacheKey);
+		if (!entry || entry.signature !== signature) return undefined;
+		this.#hits += 1;
+		return entry.fingerprint;
+	}
+
+	set(cacheKey: string, signature: string, fingerprint: string): void {
+		this.#entries.set(cacheKey, { signature, fingerprint });
+		this.#misses += 1;
+	}
+
+	retain(cacheKeys: Set<string>): void {
+		for (const cacheKey of this.#entries.keys()) {
+			if (!cacheKeys.has(cacheKey)) this.#entries.delete(cacheKey);
+		}
+	}
+
+	getStats(): AtlasRepositoryFingerprintCacheStats {
+		return {
+			entries: this.#entries.size,
+			hits: this.#hits,
+			misses: this.#misses,
+		};
+	}
 }
 
 function positiveInteger(value: number | undefined, fallback: number): number {
@@ -164,6 +215,65 @@ async function fileFingerprint(
 	return hash.digest("hex");
 }
 
+function fileSignature(stats: BigIntStats): string {
+	return [
+		stats.dev,
+		stats.ino,
+		stats.mode,
+		stats.size,
+		stats.mtimeNs,
+		stats.ctimeNs,
+	].join(":");
+}
+
+async function stableFileFingerprint(
+	absolutePath: string,
+	contentCache: AtlasRepositoryFingerprintCache | undefined,
+	signal?: AbortSignal,
+): Promise<{ bytes: number; fingerprint: string } | null> {
+	for (let attempt = 0; attempt < 3; attempt += 1) {
+		signal?.throwIfAborted();
+		let before: BigIntStats;
+		try {
+			before = await lstat(absolutePath, { bigint: true });
+		} catch {
+			signal?.throwIfAborted();
+			return null;
+		}
+		if (before.isSymbolicLink() || !before.isFile()) return null;
+		const signature = fileSignature(before);
+		const cached = contentCache?.get(absolutePath, signature);
+		if (cached) {
+			return { bytes: Number(before.size), fingerprint: cached };
+		}
+
+		let fingerprint: string;
+		try {
+			fingerprint = await fileFingerprint(absolutePath, signal);
+		} catch {
+			signal?.throwIfAborted();
+			try {
+				const afterFailure = await lstat(absolutePath, { bigint: true });
+				if (fileSignature(afterFailure) === signature) return null;
+			} catch {
+				signal?.throwIfAborted();
+			}
+			continue;
+		}
+		let after: BigIntStats;
+		try {
+			after = await lstat(absolutePath, { bigint: true });
+		} catch {
+			signal?.throwIfAborted();
+			continue;
+		}
+		if (fileSignature(after) !== signature) continue;
+		contentCache?.set(absolutePath, signature, fingerprint);
+		return { bytes: Number(after.size), fingerprint };
+	}
+	throw new Error(`Repository file kept changing while hashing: ${absolutePath}`);
+}
+
 /**
  * Hash the bounded set of repository files that can affect an Atlas snapshot.
  *
@@ -217,40 +327,30 @@ export async function collectAtlasRepositoryFingerprint(
 	let bytes = 0;
 	let files = 0;
 	let truncated = discovered.length > maxFiles;
+	const retainedCacheKeys = new Set<string>();
 
 	for (const repositoryPath of candidates) {
 		options.signal?.throwIfAborted();
 		const absolutePath = join(canonicalRoot, ...repositoryPath.split("/"));
-		let fileStats;
-		try {
-			fileStats = await lstat(absolutePath);
-		} catch {
-			options.signal?.throwIfAborted();
-			continue;
-		}
+		const file = await stableFileFingerprint(
+			absolutePath,
+			options.contentCache,
+			options.signal,
+		);
+		if (!file) continue;
+		retainedCacheKeys.add(absolutePath);
 		if (
-			fileStats.isSymbolicLink() ||
-			!fileStats.isFile()
-		) continue;
-
-		let contentFingerprint: string;
-		try {
-			contentFingerprint = await fileFingerprint(absolutePath, options.signal);
-		} catch {
-			options.signal?.throwIfAborted();
-			continue;
-		}
-		if (
-			fileStats.size > maxFileBytes ||
-			bytes + fileStats.size > maxTotalBytes
+			file.bytes > maxFileBytes ||
+			bytes + file.bytes > maxTotalBytes
 		) truncated = true;
-		bytes += fileStats.size;
+		bytes += file.bytes;
 		files += 1;
 		fingerprintEntries.push({
 			path: repositoryPath,
-			contentFingerprint,
+			contentFingerprint: file.fingerprint,
 		});
 	}
+	options.contentCache?.retain(retainedCacheKeys);
 	fingerprintEntries.push({
 		path: "\0atlas-fingerprint-result",
 		contentFingerprint: `${files}:${bytes}:${truncated ? 1 : 0}`,

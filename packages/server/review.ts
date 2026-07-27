@@ -1567,7 +1567,8 @@ export async function startReviewServer(
         }
         return Response.json(atlasReviewUnavailableStatus(error), { status: 409 });
       }
-      throw error;
+      console.error("[plannotator] Atlas request failed:", error);
+      return Response.json({ error: "Atlas request failed" }, { status: 500 });
     }
   };
 

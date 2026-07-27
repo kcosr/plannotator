@@ -75,6 +75,26 @@ const MODIFIERS = new Set([
 ]);
 
 const PARAMETERIZED_MODIFIERS = new Set(["each", "for", "runIf", "skipIf"]);
+const REGEX_PREFIX_KEYWORDS = new Set([
+	"await",
+	"case",
+	"delete",
+	"do",
+	"else",
+	"in",
+	"instanceof",
+	"of",
+	"return",
+	"throw",
+	"typeof",
+	"void",
+	"yield",
+]);
+
+interface MaskedJavaScript {
+	content: string;
+	templateEnds: Map<number, number>;
+}
 
 function lineCount(content: string): number {
 	if (content.length === 0) return 0;
@@ -290,69 +310,241 @@ function normalizeRanges(ranges: JavaScriptTestRange[]): JavaScriptTestRange[] {
 	return result;
 }
 
-function maskNonCode(content: string): string {
-	const masked = content.split("");
-	let quote: "'" | '"' | "`" | null = null;
-	let lineComment = false;
-	let blockComment = false;
-	for (let index = 0; index < content.length; index += 1) {
+function quotedEnd(
+	content: string,
+	openingOffset: number,
+	quote: "'" | '"',
+): number | null {
+	for (let index = openingOffset + 1; index < content.length; index += 1) {
+		const character = content[index]!;
+		if (character === "\\") {
+			index += 1;
+			continue;
+		}
+		if (character === quote) return index;
+		if (character === "\n" || character === "\r") return null;
+	}
+	return null;
+}
+
+function regexEnd(content: string, openingOffset: number): number | null {
+	let inCharacterClass = false;
+	for (let index = openingOffset + 1; index < content.length; index += 1) {
+		const character = content[index]!;
+		if (character === "\\" && index + 1 < content.length) {
+			index += 1;
+			continue;
+		}
+		if (character === "\n" || character === "\r") return null;
+		if (character === "[") {
+			inCharacterClass = true;
+			continue;
+		}
+		if (character === "]") {
+			inCharacterClass = false;
+			continue;
+		}
+		if (character !== "/" || inCharacterClass) continue;
+		let end = index;
+		while (/[A-Za-z]/.test(content[end + 1] ?? "")) end += 1;
+		return end;
+	}
+	return null;
+}
+
+function lineCommentEnd(content: string, openingOffset: number): number {
+	const newline = content.indexOf("\n", openingOffset + 2);
+	return newline < 0 ? content.length - 1 : newline - 1;
+}
+
+function blockCommentEnd(content: string, openingOffset: number): number {
+	const closing = content.indexOf("*/", openingOffset + 2);
+	return closing < 0 ? content.length - 1 : closing + 1;
+}
+
+function templateExpressionEnd(
+	content: string,
+	openingOffset: number,
+): number | null {
+	let depth = 1;
+	let canStartRegex = true;
+	for (let index = openingOffset + 1; index < content.length; index += 1) {
 		const character = content[index]!;
 		const next = content[index + 1];
-		if (lineComment) {
-			if (character === "\n") {
-				lineComment = false;
-			} else {
-				masked[index] = " ";
-			}
+		if (/\s/.test(character)) continue;
+		if (character === "'" || character === '"') {
+			const end = quotedEnd(content, index, character);
+			if (end === null) return null;
+			index = end;
+			canStartRegex = false;
 			continue;
 		}
-		if (blockComment) {
-			if (character === "\n") continue;
-			masked[index] = " ";
-			if (character === "*" && next === "/") {
-				masked[index + 1] = " ";
-				blockComment = false;
-				index += 1;
-			}
-			continue;
-		}
-		if (quote) {
-			if (character === "\n") continue;
-			masked[index] = " ";
-			if (character === "\\") {
-				if (next !== "\n") masked[index + 1] = " ";
-				index += 1;
-				continue;
-			}
-			if (character === quote) quote = null;
+		if (character === "`") {
+			const end = templateEnd(content, index);
+			if (end === null) return null;
+			index = end;
+			canStartRegex = false;
 			continue;
 		}
 		if (character === "/" && next === "/") {
-			masked[index] = " ";
-			masked[index + 1] = " ";
-			lineComment = true;
-			index += 1;
+			index = lineCommentEnd(content, index);
 			continue;
 		}
 		if (character === "/" && next === "*") {
-			masked[index] = " ";
-			masked[index + 1] = " ";
-			blockComment = true;
+			index = blockCommentEnd(content, index);
+			continue;
+		}
+		if (character === "/" && canStartRegex) {
+			const end = regexEnd(content, index);
+			if (end !== null) {
+				index = end;
+				canStartRegex = false;
+				continue;
+			}
+		}
+		if (/[A-Za-z_$]/.test(character)) {
+			let end = index + 1;
+			while (/[\w$]/.test(content[end] ?? "")) end += 1;
+			canStartRegex = REGEX_PREFIX_KEYWORDS.has(content.slice(index, end));
+			index = end - 1;
+			continue;
+		}
+		if (character === "{") {
+			depth += 1;
+			canStartRegex = true;
+			continue;
+		}
+		if (character === "}") {
+			depth -= 1;
+			if (depth === 0) return index;
+			canStartRegex = false;
+			continue;
+		}
+		canStartRegex = !/[\w)\].]/.test(character);
+	}
+	return null;
+}
+
+function templateEnd(content: string, openingOffset: number): number | null {
+	for (let index = openingOffset + 1; index < content.length; index += 1) {
+		const character = content[index]!;
+		if (character === "\\") {
 			index += 1;
 			continue;
 		}
-		if (character === "'" || character === '"' || character === "`") {
-			masked[index] = " ";
-			quote = character;
-		}
+		if (character === "`") return index;
+		if (character !== "$" || content[index + 1] !== "{") continue;
+		const end = templateExpressionEnd(content, index + 1);
+		if (end === null) return null;
+		index = end;
 	}
-	return masked.join("");
+	return null;
+}
+
+function maskRange(masked: string[], content: string, start: number, end: number): void {
+	for (let index = start; index <= end; index += 1) {
+		if (content[index] !== "\n" && content[index] !== "\r") masked[index] = " ";
+	}
+}
+
+function maskNonCode(content: string): MaskedJavaScript {
+	const masked = content.split("");
+	const templateEnds = new Map<number, number>();
+	let canStartRegex = true;
+	for (let index = 0; index < content.length; index += 1) {
+		const character = content[index]!;
+		const next = content[index + 1];
+		if (/\s/.test(character)) continue;
+		if (character === "/" && next === "/") {
+			const end = lineCommentEnd(content, index);
+			maskRange(masked, content, index, end);
+			index = end;
+			continue;
+		}
+		if (character === "/" && next === "*") {
+			const end = blockCommentEnd(content, index);
+			maskRange(masked, content, index, end);
+			index = end;
+			continue;
+		}
+		if (character === "'" || character === '"') {
+			const end = quotedEnd(content, index, character);
+			if (end !== null) {
+				maskRange(masked, content, index, end);
+				index = end;
+			}
+			canStartRegex = false;
+			continue;
+		}
+		if (character === "`") {
+			const end = templateEnd(content, index);
+			if (end !== null) {
+				templateEnds.set(index, end);
+				maskRange(masked, content, index, end);
+				index = end;
+			}
+			canStartRegex = false;
+			continue;
+		}
+		if (character === "/" && canStartRegex) {
+			const end = regexEnd(content, index);
+			if (end !== null) {
+				maskRange(masked, content, index, end);
+				index = end;
+				canStartRegex = false;
+				continue;
+			}
+		}
+		if (/[A-Za-z_$]/.test(character)) {
+			let end = index + 1;
+			while (/[\w$]/.test(content[end] ?? "")) end += 1;
+			canStartRegex = REGEX_PREFIX_KEYWORDS.has(content.slice(index, end));
+			index = end - 1;
+			continue;
+		}
+		if (/\d/.test(character)) {
+			let end = index + 1;
+			while (/[\w.]/.test(content[end] ?? "")) end += 1;
+			index = end - 1;
+			canStartRegex = false;
+			continue;
+		}
+		if (
+			(character === "+" && next === "+") ||
+			(character === "-" && next === "-")
+		) {
+			index += 1;
+			canStartRegex = false;
+			continue;
+		}
+		canStartRegex = !/[)\]}.]/.test(character);
+	}
+	return { content: masked.join(""), templateEnds };
 }
 
 function skipWhitespace(content: string, offset: number): number {
 	let cursor = offset;
 	while (cursor < content.length && /\s/.test(content[cursor]!)) cursor += 1;
 	return cursor;
+}
+
+function skipMaskedTrivia(
+	masked: MaskedJavaScript,
+	offset: number,
+): { offset: number; taggedTemplate: boolean } {
+	let cursor = offset;
+	let taggedTemplate = false;
+	while (cursor < masked.content.length) {
+		const templateEndOffset = masked.templateEnds.get(cursor);
+		if (templateEndOffset !== undefined) {
+			taggedTemplate = true;
+			cursor = templateEndOffset + 1;
+			continue;
+		}
+		if (!/\s/.test(masked.content[cursor]!)) break;
+		cursor += 1;
+	}
+	return { offset: cursor, taggedTemplate };
 }
 
 function matchingCallEnd(content: string, openingOffset: number): number | null {
@@ -372,26 +564,29 @@ function inlineTestRanges(
 ): JavaScriptTestRange[] {
 	const ranges: JavaScriptTestRange[] = [];
 	const masked = maskNonCode(content);
-	for (const match of masked.matchAll(
+	for (const match of masked.content.matchAll(
 		/^[\t ]*(?:await[\t ]+)?([A-Za-z_$][\w$]*(?:(?:\?\.|\.)[A-Za-z_$][\w$]*)*)/gm,
 	)) {
 		const callee = match[1]!;
 		if (!semanticCallee(callee, bindings)) continue;
 		const startOffset = match.index;
-		let openingOffset = skipWhitespace(
+		const firstCall = skipMaskedTrivia(
 			masked,
 			startOffset + match[0].length,
 		);
-		if (masked[openingOffset] !== "(") continue;
-		let closingOffset = matchingCallEnd(masked, openingOffset);
+		let openingOffset = firstCall.offset;
+		if (masked.content[openingOffset] !== "(") continue;
+		let closingOffset = matchingCallEnd(masked.content, openingOffset);
 		if (closingOffset === null) continue;
 
 		const lastPart = calleeParts(callee).at(-1);
 		if (lastPart && PARAMETERIZED_MODIFIERS.has(lastPart)) {
-			openingOffset = skipWhitespace(masked, closingOffset + 1);
-			if (masked[openingOffset] !== "(") continue;
-			closingOffset = matchingCallEnd(masked, openingOffset);
-			if (closingOffset === null) continue;
+			if (!firstCall.taggedTemplate) {
+				openingOffset = skipWhitespace(masked.content, closingOffset + 1);
+				if (masked.content[openingOffset] !== "(") continue;
+				closingOffset = matchingCallEnd(masked.content, openingOffset);
+				if (closingOffset === null) continue;
+			}
 		}
 		ranges.push({
 			startLine: lineAtOffset(content, startOffset),

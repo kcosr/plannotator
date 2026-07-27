@@ -7,6 +7,11 @@ function item(
 	startLine: number,
 	endLine: number,
 	symbolType = "function",
+	options: {
+		signature?: string;
+		astKind?: string;
+		isImport?: boolean;
+	} = {},
 ): StructuralItem {
 	return {
 		role: "item",
@@ -16,9 +21,9 @@ function item(
 			start: { line: startLine - 1, column: 0 },
 			end: { line: endLine - 1, column: 1 },
 		},
-		signature: name,
-		astKind: "function",
-		isImport: false,
+		signature: options.signature ?? name,
+		astKind: options.astKind ?? "function",
+		isImport: options.isImport ?? false,
 		isExported: false,
 	};
 }
@@ -77,6 +82,107 @@ describe("conventional Atlas test classification", () => {
 				]),
 			),
 		).toEqual([]);
+	});
+
+	test("classifies Python tests grounded in unittest and pytest context", () => {
+		const unittestSource = [
+			"import unittest",
+			"class ServiceChecks(ServiceMixin, unittest.TestCase):",
+			"    def test_works(self):",
+			"        pass",
+			"    def helper(self):",
+			"        pass",
+		].join("\n");
+		expect(classifyConventionalTestRanges(
+			"python",
+			"src/service_checks.py",
+			unittestSource,
+			outline("python", [
+				item("unittest", 1, 1, "module", {
+					signature: "import unittest",
+					astKind: "import_statement",
+					isImport: true,
+				}),
+				item("ServiceChecks", 2, 6, "class", {
+					signature: "class ServiceChecks(ServiceMixin, unittest.TestCase):",
+					astKind: "class_definition",
+				}),
+			]),
+		)).toEqual([expect.objectContaining({
+			startLine: 2,
+			endLine: 6,
+			reason: "python-test-symbol",
+			confidence: "semantic",
+		})]);
+
+		const pytestSource = [
+			"import pytest",
+			"def live():",
+			"    pass",
+			"def test_inline():",
+			"    assert True",
+			"class Service:",
+			"    def test_connection(self):",
+			"        return True",
+		].join("\n");
+		expect(classifyConventionalTestRanges(
+			"python",
+			"src/service.py",
+			pytestSource,
+			outline("python", [
+				item("pytest", 1, 1, "module", {
+					signature: "import pytest",
+					astKind: "import_statement",
+					isImport: true,
+				}),
+				item("live", 2, 3),
+				item("test_inline", 4, 5),
+				item("Service", 6, 8, "class", {
+					signature: "class Service:",
+					astKind: "class_definition",
+				}),
+			]),
+		)).toEqual([expect.objectContaining({
+			startLine: 4,
+			endLine: 5,
+			reason: "python-test-symbol",
+		})]);
+	});
+
+	test("classifies Ruby test-case subclasses but not unrelated methods", () => {
+		const source = [
+			"require 'minitest/autorun'",
+			"class ServiceChecks < Minitest::Test",
+			"  def test_works",
+			"  end",
+			"  def helper",
+			"  end",
+			"end",
+			"class Service",
+			"  def test_connection",
+			"  end",
+			"end",
+		].join("\n");
+		expect(classifyConventionalTestRanges(
+			"ruby",
+			"lib/service_checks.rb",
+			source,
+			outline("ruby", [
+				item("ServiceChecks", 2, 7, "class", {
+					signature: "class ServiceChecks < Minitest::Test",
+					astKind: "class",
+				}),
+				item("Service", 8, 11, "class", {
+					signature: "class Service",
+					astKind: "class",
+				}),
+			]),
+		)).toEqual([expect.objectContaining({
+			startLine: 2,
+			endLine: 7,
+			reason: "ruby-test-symbol",
+			confidence: "semantic",
+		})]);
 	});
 
 	test("classifies Go test files", () => {

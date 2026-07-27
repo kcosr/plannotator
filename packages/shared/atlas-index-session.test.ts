@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, test } from "bun:test";
-import { mkdirSync, mkdtempSync, rmSync } from "node:fs";
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import {
@@ -11,6 +11,7 @@ import {
 	isAtlasSnapshot,
 } from "./atlas-index-session";
 import { openAtlasSnapshotCache } from "./atlas-snapshot-cache";
+import { collectAtlasRepositoryFingerprint } from "./atlas-repository-fingerprint";
 
 const temporaryDirectories: string[] = [];
 const sessions: AtlasIndexSession[] = [];
@@ -346,6 +347,34 @@ describe("AtlasIndexSession", () => {
 		await session.reindex();
 		expect(builds).toBe(1);
 		expect(session.getSnapshot()).toEqual(fresh);
+	});
+
+	test("semantic verification uses the session fingerprint options", async () => {
+		const { root, databasePath } = temporaryRepository();
+		writeFileSync(join(root, "a.ts"), "export const a = 1;\n");
+		writeFileSync(join(root, "b.ts"), "export const b = 1;\n");
+		const session = await AtlasIndexSession.open({
+			rootPath: root,
+			cacheOptions: { indexPath: databasePath },
+			fingerprintOptions: { maxFiles: 1 },
+			buildSnapshot: async () => snapshot(root, "limited"),
+		});
+		sessions.push(session);
+		session.start();
+		await session.waitUntilIdle();
+		const generation = session.getSnapshotGeneration();
+		expect(generation).toBeDefined();
+
+		await expect(session.verifyRepositoryFingerprint(
+			generation!.repositoryFingerprint,
+		)).resolves.toBeUndefined();
+		const defaultFingerprint = (
+			await collectAtlasRepositoryFingerprint(root)
+		).fingerprint;
+		expect(defaultFingerprint).not.toBe(generation!.repositoryFingerprint);
+		await expect(
+			session.verifyRepositoryFingerprint(defaultFingerprint),
+		).rejects.toThrow("Repository changed since the Atlas index was generated");
 	});
 
 	test("dispose cancels active work and prevents a late snapshot swap", async () => {

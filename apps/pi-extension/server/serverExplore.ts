@@ -324,6 +324,8 @@ export async function startExploreServer(options: {
 		rootPath,
 		indexPath: indexSession.indexPath,
 		session: semanticSession,
+		verifyRepositoryFingerprint: (expectedFingerprint, signal) =>
+			indexSession.verifyRepositoryFingerprint(expectedFingerprint, signal),
 	});
 	void semanticIndexPromise.catch((error) => {
 		console.warn(

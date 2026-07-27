@@ -269,6 +269,8 @@ export class AtlasReviewRuntimeManager {
 				rootPath,
 				indexPath: indexSession.indexPath,
 				session: semanticSession,
+				verifyRepositoryFingerprint: (expectedFingerprint, signal) =>
+					indexSession.verifyRepositoryFingerprint(expectedFingerprint, signal),
 			});
 			void semanticIndex.catch(() => {});
 			this.#runtime = {

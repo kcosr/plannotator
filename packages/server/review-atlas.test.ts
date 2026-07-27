@@ -107,16 +107,14 @@ for (const runtime of [
         );
         expect(traversal.status).toBe(404);
 
-        if (runtime.name === "Pi") {
-          const semanticFailure = await fetch(
-            `${server.url}/api/atlas/references?symbol=Architecture&path=notes.txt&line=1&column=1`,
-          );
-          expect(semanticFailure.status).toBe(500);
-          expect(semanticFailure.headers.get("content-type")).toContain("application/json");
-          expect(await semanticFailure.json()).toEqual({
-            error: "Atlas request failed",
-          });
-        }
+        const semanticFailure = await fetch(
+          `${server.url}/api/atlas/references?symbol=Architecture&path=notes.txt&line=1&column=1`,
+        );
+        expect(semanticFailure.status).toBe(500);
+        expect(semanticFailure.headers.get("content-type")).toContain("application/json");
+        expect(await semanticFailure.json()).toEqual({
+          error: "Atlas request failed",
+        });
       } finally {
         await server.stop();
       }

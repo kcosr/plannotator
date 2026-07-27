@@ -73,6 +73,48 @@ function entryRange(
 	};
 }
 
+function itemSource(content: string, item: StructuralItem): string {
+	const lines = content.split(/\r\n|\r|\n/);
+	const { start, end } = item.range;
+	if (start.line === end.line) {
+		return (lines[start.line] ?? "").slice(start.column, end.column);
+	}
+	return [
+		(lines[start.line] ?? "").slice(start.column),
+		...lines.slice(start.line + 1, end.line),
+		(lines[end.line] ?? "").slice(0, end.column),
+	].join("\n");
+}
+
+function hasPytestImport(
+	content: string,
+	outline: StructuralFileOutline | undefined,
+): boolean {
+	return (outline?.items ?? []).some((item) => {
+		if (!item.isImport) return false;
+		if (item.name === "pytest") return true;
+		const source = `${item.signature}\n${itemSource(content, item)}`;
+		return (
+			/^\s*import\s+pytest(?:\s+as\s+\w+)?\s*$/m.test(source) ||
+			/^\s*from\s+pytest(?:\.\w+)*\s+import\b/m.test(source)
+		);
+	});
+}
+
+function pythonTestCaseClass(item: StructuralItem): boolean {
+	if (item.symbolType !== "class") return false;
+	return /(?:\(|,)\s*(?:[A-Za-z_]\w*\.)*(?:[A-Za-z_]\w*)?TestCase\s*(?:[,)\[])/.test(
+		item.signature,
+	);
+}
+
+function rubyTestCaseClass(item: StructuralItem): boolean {
+	if (item.symbolType !== "class") return false;
+	return /<\s*(?:(?:[A-Za-z_]\w*::)*(?:[A-Za-z_]\w*)?TestCase|Minitest::Test|ActionDispatch::IntegrationTest)\b/.test(
+		item.signature,
+	);
+}
+
 function leadingJavaTestAnnotationLine(
 	lines: string[],
 	entry: StructuralEntry,
@@ -133,6 +175,33 @@ export function classifyConventionalTestRanges(
 
 	const lines = content.split(/\r\n|\r|\n/);
 	const ranges: AtlasTestRange[] = [];
+	if (language === "python") {
+		const pytestImported = hasPytestImport(content, outline);
+		for (const item of outline?.items ?? []) {
+			if (
+				pythonTestCaseClass(item) ||
+				(
+					pytestImported &&
+					item.symbolType === "class" &&
+					/^Test[A-Z_]/.test(item.name)
+				) ||
+				(
+					item.symbolType === "function" &&
+					/^test_/.test(item.name) &&
+					pytestImported
+				)
+			) {
+				ranges.push(entryRange(item, "python-test-symbol"));
+			}
+		}
+	}
+	if (language === "ruby") {
+		for (const item of outline?.items ?? []) {
+			if (rubyTestCaseClass(item)) {
+				ranges.push(entryRange(item, "ruby-test-symbol"));
+			}
+		}
+	}
 	for (const entry of flattenEntries(outline)) {
 		if (language === "java") {
 			const annotationLine = leadingJavaTestAnnotationLine(lines, entry);

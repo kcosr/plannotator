@@ -154,6 +154,8 @@ export async function indexAtlasRepository(
       const semanticIndex = await AtlasSemanticIndexService.open({
         rootPath: session.rootPath,
         indexPath: session.indexPath,
+        verifyRepositoryFingerprint: (expectedFingerprint, signal) =>
+          session.verifyRepositoryFingerprint(expectedFingerprint, signal),
       });
       try {
         semantic = await semanticIndex.indexAll({
@@ -401,6 +403,8 @@ export async function startExploreServer(
     rootPath,
     indexPath: indexSession.indexPath,
     session: semanticSession,
+    verifyRepositoryFingerprint: (expectedFingerprint, signal) =>
+      indexSession.verifyRepositoryFingerprint(expectedFingerprint, signal),
   });
   void semanticIndexPromise.catch((error) => {
     console.warn(
