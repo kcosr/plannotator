@@ -19,6 +19,33 @@ export function annotationMatchesPrScope(
 }
 
 /**
+ * Atlas notes are anchored to repository source rather than a particular diff
+ * projection. They remain isolated to their PR, but survive layer/full-stack
+ * switches within that PR.
+ */
+export function annotationMatchesReviewContext(
+  annotation: CodeAnnotation,
+  prUrl: string | undefined,
+  prDiffScope: string | undefined,
+): boolean {
+  return annotation.source === 'atlas'
+    ? proseAnnotationMatchesPr(annotation, prUrl)
+    : annotationMatchesPrScope(annotation, prUrl, prDiffScope);
+}
+
+export function formatAnnotationAIContext(annotation: CodeAnnotation): string {
+  const lines = annotation.lineStart === annotation.lineEnd
+    ? String(annotation.lineStart)
+    : `${annotation.lineStart}-${annotation.lineEnd}`;
+  const coordinateKind = annotation.source === 'atlas'
+    ? 'codebase source coordinates'
+    : `${annotation.side} diff coordinates`;
+  return `- [${coordinateKind}] ${annotation.filePath}:${lines}: ${
+    annotation.text ?? annotation.type
+  }`;
+}
+
+/**
  * True when a prose annotation (PR description / PR comment note) belongs to the
  * active PR, or carries no PR scope. Mirrors the prUrl half of
  * {@link annotationMatchesPrScope} for the two prose stores, which have no diff

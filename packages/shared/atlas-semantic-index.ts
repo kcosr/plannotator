@@ -1,5 +1,6 @@
 import { createHash } from "node:crypto";
 import { mkdirSync, realpathSync } from "node:fs";
+import { readFile } from "node:fs/promises";
 import { dirname, isAbsolute, resolve } from "node:path";
 import type {
 	AtlasNode,
@@ -10,6 +11,7 @@ import type {
 import {
 	resolveAtlasCallHierarchyOutcome,
 	resolveAtlasReferencesOutcome,
+	resolveAtlasSourcePath,
 	validateAtlasRelativePath,
 	type AtlasCallHierarchyResponse,
 	type AtlasCallHierarchyTarget,
@@ -23,8 +25,9 @@ import {
 	type AtlasSemanticCapability,
 	type AtlasSemanticLanguage,
 } from "./atlas-semantic";
+import { collectAtlasRepositoryFingerprint } from "./atlas-repository-fingerprint";
 
-export const ATLAS_SEMANTIC_INDEX_SCHEMA_VERSION = 1;
+export const ATLAS_SEMANTIC_INDEX_SCHEMA_VERSION = 2;
 
 interface SqliteStatement {
 	all(...parameters: unknown[]): unknown[];
@@ -50,6 +53,7 @@ interface QueryDescriptor {
 	repositoryFingerprint: string;
 	snapshotVersion: number;
 	providerFingerprint: string;
+	contentFingerprint: string;
 	kind: QueryKind;
 	filePath: string;
 	line: number;
@@ -108,6 +112,10 @@ export interface OpenAtlasSemanticIndexServiceOptions {
 	session?: AtlasSemanticSession;
 	capabilities?: Record<AtlasSemanticLanguage, AtlasSemanticCapability>;
 	semanticSessionOptions?: ConstructorParameters<typeof AtlasSemanticSession>[0];
+	verifyRepositoryFingerprint?: (
+		expectedFingerprint: string,
+		signal?: AbortSignal,
+	) => Promise<void>;
 }
 
 export interface AtlasSemanticLookup<T> {
@@ -150,6 +158,20 @@ export interface AtlasSemanticIndexAllOptions {
 	repositoryFingerprint: string;
 	signal?: AbortSignal;
 	onProgress?: (progress: AtlasSemanticIndexProgress) => void;
+}
+
+export class AtlasSemanticContentChangedError extends Error {
+	constructor(filePath: string) {
+		super(`Atlas source changed during semantic lookup: ${filePath}`);
+		this.name = "AtlasSemanticContentChangedError";
+	}
+}
+
+export class AtlasSemanticRepositoryChangedError extends Error {
+	constructor() {
+		super("Repository changed during semantic lookup");
+		this.name = "AtlasSemanticRepositoryChangedError";
+	}
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -804,6 +826,16 @@ export class AtlasSemanticIndexStore {
 		).run(queryKeyValue);
 	}
 
+	deleteRepositoryGeneration(
+		repositoryFingerprint: string,
+		snapshotVersion: number,
+	): void {
+		this.#database?.prepare(`
+			DELETE FROM atlas_semantic_queries
+			WHERE repository_fingerprint = ? AND snapshot_version = ?
+		`).run(repositoryFingerprint, snapshotVersion);
+	}
+
 	close(): void {
 		const database = this.#database;
 		this.#database = null;
@@ -826,13 +858,13 @@ export class AtlasSemanticIndexStore {
 					AND snapshot_version = ?
 					AND provider_fingerprint = ?
 					AND query_kind = ?
-			`).get(
-				descriptor.queryKey,
-				descriptor.repositoryFingerprint,
-				descriptor.snapshotVersion,
-				descriptor.providerFingerprint,
-				descriptor.kind,
-			);
+		`).get(
+			descriptor.queryKey,
+			descriptor.repositoryFingerprint,
+			descriptor.snapshotVersion,
+			descriptor.providerFingerprint,
+			descriptor.kind,
+		);
 		return isStoredQueryRow(row) ? row : null;
 	}
 
@@ -915,6 +947,10 @@ export class AtlasSemanticIndexService {
 	#store: AtlasSemanticIndexStore;
 	#session: AtlasSemanticSession;
 	#ownsSession: boolean;
+	#verifyRepositoryFingerprint: (
+		expectedFingerprint: string,
+		signal?: AbortSignal,
+	) => Promise<void>;
 	#disposed = false;
 
 	private constructor(
@@ -923,6 +959,10 @@ export class AtlasSemanticIndexService {
 		session: AtlasSemanticSession,
 		ownsSession: boolean,
 		capabilities: Record<AtlasSemanticLanguage, AtlasSemanticCapability>,
+		verifyRepositoryFingerprint: (
+			expectedFingerprint: string,
+			signal?: AbortSignal,
+		) => Promise<void>,
 	) {
 		this.rootPath = rootPath;
 		this.indexPath = store.indexPath;
@@ -930,6 +970,7 @@ export class AtlasSemanticIndexService {
 		this.#session = session;
 		this.#ownsSession = ownsSession;
 		this.capabilities = capabilities;
+		this.#verifyRepositoryFingerprint = verifyRepositoryFingerprint;
 	}
 
 	static async open(
@@ -944,22 +985,46 @@ export class AtlasSemanticIndexService {
 		]);
 		const session = options.session ??
 			new AtlasSemanticSession(options.semanticSessionOptions);
+		const verifyRepositoryFingerprint =
+			options.verifyRepositoryFingerprint ??
+			(async (expectedFingerprint, signal) => {
+				const current = await collectAtlasRepositoryFingerprint(rootPath, {
+					excludedPaths: [options.indexPath],
+					signal,
+				});
+				if (current.fingerprint !== expectedFingerprint) {
+					throw new AtlasSemanticRepositoryChangedError();
+				}
+			});
 		return new AtlasSemanticIndexService(
 			rootPath,
 			store,
 			session,
 			options.session === undefined,
 			capabilities,
+			verifyRepositoryFingerprint,
 		);
 	}
 
 	async resolveReferences(
 		input: AtlasSemanticReferenceInput,
 	): Promise<AtlasSemanticLookup<AtlasReferenceResponse>> {
+		return this.#resolveReferences(input, true);
+	}
+
+	async #resolveReferences(
+		input: AtlasSemanticReferenceInput,
+		verifyRepository: boolean,
+	): Promise<AtlasSemanticLookup<AtlasReferenceResponse>> {
 		this.#assertActive();
-			const descriptor = this.#descriptor("references", input, input.symbol);
-			const cached = this.#store.getReferences(descriptor)
-				?? this.#store.findReferencesAtLocation(descriptor);
+		const descriptor = await this.#descriptor(
+			"references",
+			input,
+			input.symbol,
+			verifyRepository,
+		);
+		const cached = this.#store.getReferences(descriptor)
+			?? this.#store.findReferencesAtLocation(descriptor);
 		if (cached) {
 			return {
 				response: cached,
@@ -977,6 +1042,10 @@ export class AtlasSemanticIndexService {
 			descriptor.column,
 			input.signal,
 		);
+		await this.#assertContentStable(descriptor, input.signal);
+		if (verifyRepository) {
+			await this.#assertRepositoryStable(descriptor, input.signal);
+		}
 		const state = stateForOutcome(outcome);
 		if (state) this.#store.setReferences(descriptor, state, outcome.response);
 		return {
@@ -989,10 +1058,22 @@ export class AtlasSemanticIndexService {
 	async resolveCalls(
 		input: AtlasSemanticQueryInput,
 	): Promise<AtlasSemanticLookup<AtlasCallHierarchyResponse>> {
+		return this.#resolveCalls(input, true);
+	}
+
+	async #resolveCalls(
+		input: AtlasSemanticQueryInput,
+		verifyRepository: boolean,
+	): Promise<AtlasSemanticLookup<AtlasCallHierarchyResponse>> {
 		this.#assertActive();
-			const descriptor = this.#descriptor("calls", input, "");
-			const cached = this.#store.getCalls(descriptor)
-				?? this.#store.findCallsAtLocation(descriptor);
+		const descriptor = await this.#descriptor(
+			"calls",
+			input,
+			"",
+			verifyRepository,
+		);
+		const cached = this.#store.getCalls(descriptor)
+			?? this.#store.findCallsAtLocation(descriptor);
 		if (cached) {
 			return {
 				response: cached,
@@ -1011,6 +1092,10 @@ export class AtlasSemanticIndexService {
 			descriptor.column,
 			input.signal,
 		);
+		await this.#assertContentStable(descriptor, input.signal);
+		if (verifyRepository) {
+			await this.#assertRepositoryStable(descriptor, input.signal);
+		}
 		const state = stateForOutcome(outcome);
 		if (state) this.#store.setCalls(descriptor, state, outcome.response);
 		return {
@@ -1024,7 +1109,14 @@ export class AtlasSemanticIndexService {
 		options: AtlasSemanticIndexAllOptions,
 	): Promise<AtlasSemanticIndexProgress> {
 		this.#assertActive();
-		validateFingerprint(options.repositoryFingerprint, "Repository fingerprint");
+		const repositoryFingerprint = validateFingerprint(
+			options.repositoryFingerprint,
+			"Repository fingerprint",
+		);
+		await this.#verifyRepositoryFingerprint(
+			repositoryFingerprint,
+			options.signal,
+		);
 		const work = options.snapshot.nodes
 			.filter((node) => node.kind === "file" && languageForNode(node) !== null)
 			.flatMap((node) =>
@@ -1056,32 +1148,40 @@ export class AtlasSemanticIndexService {
 				symbol: item.symbol.name,
 				language,
 			};
+			progress.completed += 1;
 			let result: AtlasSemanticLookup<
 				AtlasReferenceResponse | AtlasCallHierarchyResponse
 			>;
-			if (item.kind === "references") {
-				result = await this.resolveReferences({
-					snapshot: options.snapshot,
-					repositoryFingerprint: options.repositoryFingerprint,
-					symbol: item.symbol.name,
-					filePath: item.node.path,
-					line: item.symbol.line,
-					column: item.symbol.column,
-					atlasSymbolId: item.symbol.id,
-					signal: options.signal,
-				});
-			} else {
-				result = await this.resolveCalls({
-					snapshot: options.snapshot,
-					repositoryFingerprint: options.repositoryFingerprint,
-					filePath: item.node.path,
-					line: item.symbol.line,
-					column: item.symbol.column,
-					atlasSymbolId: item.symbol.id,
-					signal: options.signal,
-				});
+			try {
+				if (item.kind === "references") {
+					result = await this.#resolveReferences({
+						snapshot: options.snapshot,
+						repositoryFingerprint: options.repositoryFingerprint,
+						symbol: item.symbol.name,
+						filePath: item.node.path,
+						line: item.symbol.line,
+						column: item.symbol.column,
+						atlasSymbolId: item.symbol.id,
+						signal: options.signal,
+					}, false);
+				} else {
+					result = await this.#resolveCalls({
+						snapshot: options.snapshot,
+						repositoryFingerprint: options.repositoryFingerprint,
+						filePath: item.node.path,
+						line: item.symbol.line,
+						column: item.symbol.column,
+						atlasSymbolId: item.symbol.id,
+						signal: options.signal,
+					}, false);
+				}
+			} catch (error) {
+				if (options.signal?.aborted) throw error;
+				if (error instanceof AtlasSemanticRepositoryChangedError) throw error;
+				progress.failed += 1;
+				options.onProgress?.({ ...progress, current: { ...progress.current } });
+				continue;
 			}
-			progress.completed += 1;
 			if (result.source === "cache") progress.cached += 1;
 			else if (result.cacheability === "complete") progress.resolved += 1;
 			else if (result.cacheability === "unsupported") progress.unsupported += 1;
@@ -1089,6 +1189,18 @@ export class AtlasSemanticIndexService {
 			options.onProgress?.({ ...progress, current: { ...progress.current } });
 		}
 		delete progress.current;
+		try {
+			await this.#verifyRepositoryFingerprint(
+				repositoryFingerprint,
+				options.signal,
+			);
+		} catch (error) {
+			this.#store.deleteRepositoryGeneration(
+				repositoryFingerprint,
+				options.snapshot.version,
+			);
+			throw error;
+		}
 		options.onProgress?.({ ...progress });
 		return progress;
 	}
@@ -1100,15 +1212,22 @@ export class AtlasSemanticIndexService {
 		if (this.#ownsSession) await this.#session.dispose();
 	}
 
-	#descriptor(
+	async #descriptor(
 		kind: QueryKind,
 		input: AtlasSemanticQueryInput,
 		symbol: string,
-	): QueryDescriptor {
+		verifyRepository: boolean,
+	): Promise<QueryDescriptor> {
 		const repositoryFingerprint = validateFingerprint(
 			input.repositoryFingerprint,
 			"Repository fingerprint",
 		);
+		if (verifyRepository) {
+			await this.#verifyRepositoryFingerprint(
+				repositoryFingerprint,
+				input.signal,
+			);
+		}
 		validatePosition(input.line, input.column);
 		const filePath = validatePortablePath(input.filePath);
 		const node = input.snapshot.nodes.find(
@@ -1119,6 +1238,10 @@ export class AtlasSemanticIndexService {
 		if (!language) throw new Error(`No semantic provider supports ${node.language ?? "text"}`);
 		const capability = this.capabilities[language];
 		const provider = providerFingerprint(capability);
+		const contentFingerprint = await this.#contentFingerprint(
+			filePath,
+			input.signal,
+		);
 		return {
 			queryKey: queryKey(
 				repositoryFingerprint,
@@ -1133,6 +1256,7 @@ export class AtlasSemanticIndexService {
 			repositoryFingerprint,
 			snapshotVersion: input.snapshot.version,
 			providerFingerprint: provider,
+			contentFingerprint,
 			kind,
 			filePath,
 			line: input.line,
@@ -1140,6 +1264,37 @@ export class AtlasSemanticIndexService {
 			symbol,
 			atlasSymbolId: input.atlasSymbolId ?? null,
 		};
+	}
+
+	async #contentFingerprint(
+		filePath: string,
+		signal?: AbortSignal,
+	): Promise<string> {
+		const absolutePath = await resolveAtlasSourcePath(this.rootPath, filePath);
+		const content = await readFile(absolutePath, { signal });
+		return `sha256:${createHash("sha256").update(content).digest("hex")}`;
+	}
+
+	async #assertContentStable(
+		descriptor: QueryDescriptor,
+		signal?: AbortSignal,
+	): Promise<void> {
+		if (
+			await this.#contentFingerprint(descriptor.filePath, signal) !==
+			descriptor.contentFingerprint
+		) {
+			throw new AtlasSemanticContentChangedError(descriptor.filePath);
+		}
+	}
+
+	async #assertRepositoryStable(
+		descriptor: QueryDescriptor,
+		signal?: AbortSignal,
+	): Promise<void> {
+		await this.#verifyRepositoryFingerprint(
+			descriptor.repositoryFingerprint,
+			signal,
+		);
 	}
 
 	#assertActive(): void {

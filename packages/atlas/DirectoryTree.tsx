@@ -12,6 +12,23 @@ interface DirectoryTreeProps {
   onFocus: (node: AtlasNode) => void;
 }
 
+export function preservedDirectoryTreeFocus(
+  nodes: readonly AtlasNode[],
+  visibleIds: ReadonlySet<string>,
+  focusedId: string | null,
+  selectedId: string | null,
+  rootId: string,
+): string {
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  let cursor = focusedId ? byId.get(focusedId) : undefined;
+  while (cursor) {
+    if (visibleIds.has(cursor.id)) return cursor.id;
+    cursor = cursor.parentId ? byId.get(cursor.parentId) : undefined;
+  }
+  if (selectedId && visibleIds.has(selectedId)) return selectedId;
+  return rootId;
+}
+
 export function DirectoryTree({
   nodes,
   codeFilter,
@@ -25,6 +42,7 @@ export function DirectoryTree({
   const [collapsed, setCollapsed] = useState<Set<string>>(() => new Set());
   const [focusedId, setFocusedId] = useState<string | null>(null);
   const rowRefs = useRef(new Map<string, HTMLDivElement>());
+  const focusWithinRef = useRef(false);
 
   const visibleNodes = useMemo(() => {
     const result: AtlasNode[] = [];
@@ -44,13 +62,27 @@ export function DirectoryTree({
 
   useEffect(() => {
     if (!root) return;
-    if (focusedId && visibleNodes.some((node) => node.id === focusedId)) return;
-    setFocusedId(selectedId && visibleNodes.some((node) => node.id === selectedId)
-      ? selectedId
-      : root.id);
-  }, [focusedId, root, selectedId, visibleNodes]);
+    const nextId = preservedDirectoryTreeFocus(
+      nodes,
+      new Set(visibleNodes.map((node) => node.id)),
+      focusedId,
+      selectedId,
+      root.id,
+    );
+    if (nextId === focusedId) return;
+    setFocusedId(nextId);
+    if (focusWithinRef.current) {
+      requestAnimationFrame(() => rowRefs.current.get(nextId)?.focus());
+    }
+  }, [focusedId, nodes, root, selectedId, visibleNodes]);
 
   if (!root) return null;
+
+  const focusNode = (node: AtlasNode | undefined) => {
+    if (!node) return;
+    setFocusedId(node.id);
+    requestAnimationFrame(() => rowRefs.current.get(node.id)?.focus());
+  };
 
   const setDirectoryCollapsed = (id: string, value: boolean) => {
     setCollapsed((current) => {
@@ -59,12 +91,7 @@ export function DirectoryTree({
       else next.delete(id);
       return next;
     });
-  };
-
-  const focusNode = (node: AtlasNode | undefined) => {
-    if (!node) return;
-    setFocusedId(node.id);
-    requestAnimationFrame(() => rowRefs.current.get(node.id)?.focus());
+    if (value) focusNode(byId.get(id));
   };
 
   const onTreeKeyDown = (event: React.KeyboardEvent, node: AtlasNode) => {
@@ -100,7 +127,7 @@ export function DirectoryTree({
     const isDirectory = node.kind !== 'file';
     const isFocus = node.id === focusedRootId;
     return (
-      <div key={node.id}>
+      <div key={node.id} role="none">
         <div
           ref={(element) => {
             if (element) rowRefs.current.set(node.id, element);
@@ -125,6 +152,7 @@ export function DirectoryTree({
             <button
               type="button"
               className="atlas-tree-disclosure"
+              tabIndex={-1}
               onClick={(event) => {
                 event.stopPropagation();
                 setDirectoryCollapsed(node.id, !isCollapsed);
@@ -145,5 +173,20 @@ export function DirectoryTree({
     );
   };
 
-  return <div className="atlas-tree" role="tree">{renderNode(root, 0)}</div>;
+  return (
+    <div
+      className="atlas-tree"
+      role="tree"
+      onFocusCapture={() => {
+        focusWithinRef.current = true;
+      }}
+      onBlurCapture={(event) => {
+        if (!event.currentTarget.contains(event.relatedTarget as Node | null)) {
+          focusWithinRef.current = false;
+        }
+      }}
+    >
+      {renderNode(root, 0)}
+    </div>
+  );
 }

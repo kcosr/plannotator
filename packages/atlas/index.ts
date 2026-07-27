@@ -23,10 +23,11 @@ export type {
 } from './BlockMap';
 export type * from './types';
 export {
+  AtlasRequestError,
   fetchCallHierarchy,
   fetchReferences,
   fetchSnapshot,
   fetchSource,
   fetchStatus,
 } from './api';
-export type { AtlasIndexStatus } from './api';
+export type { AtlasCapability, AtlasIndexStatus } from './api';

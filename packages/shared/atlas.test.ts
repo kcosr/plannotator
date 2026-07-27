@@ -62,6 +62,17 @@ afterEach(async () => {
 });
 
 describe("buildAtlasSnapshot", () => {
+	test("honors cancellation before repository traversal", async () => {
+		const root = await mkdtemp(join(tmpdir(), "plannotator-atlas-cancel-"));
+		fixtures.push(root);
+		const controller = new AbortController();
+		controller.abort(new Error("cancel snapshot"));
+
+		await expect(
+			buildAtlasSnapshot(root, { signal: controller.signal }),
+		).rejects.toThrow("cancel snapshot");
+	});
+
 	test("classifies C++ .h headers from syntax and matching translation units", async () => {
 		const root = await mkdtemp(join(tmpdir(), "plannotator-atlas-cpp-"));
 		fixtures.push(root);

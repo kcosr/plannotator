@@ -2,6 +2,7 @@ import { describe, expect, test } from 'bun:test';
 import {
   blockMapChangeColor,
   blockMapChangedLines,
+  blockMapKeyboardActivation,
   blockMapOverlayMaximum,
   blockMapQueryMatches,
   resolveBlockMapNodeOverlay,
@@ -116,5 +117,11 @@ describe('BlockMap overlays', () => {
       'src',
       'root',
     ]);
+  });
+
+  test('provides a keyboard equivalent for map drill-down', () => {
+    expect(blockMapKeyboardActivation('Enter')).toBe('open');
+    expect(blockMapKeyboardActivation(' ')).toBeNull();
+    expect(blockMapKeyboardActivation('ArrowRight')).toBeNull();
   });
 });

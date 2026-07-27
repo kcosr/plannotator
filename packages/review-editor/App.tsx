@@ -86,7 +86,12 @@ import {
   REVIEW_CODE_NAV_PANEL_ID,
 } from './dock/reviewPanelTypes';
 import type { DiffFile, AnnotationScrollTarget } from './types';
-import { annotationMatchesPrScope, proseAnnotationMatchesPr } from './utils/annotationScope';
+import {
+  annotationMatchesPrScope,
+  annotationMatchesReviewContext,
+  formatAnnotationAIContext,
+  proseAnnotationMatchesPr,
+} from './utils/annotationScope';
 import type { DiffOption, WorktreeInfo, GitContext, SinceBaseSections, CommitDiffInfo } from '@plannotator/shared/types';
 import { SectionsPanel } from './components/SectionsPanel';
 import { CommitsPanel } from './components/CommitsPanel';
@@ -605,7 +610,7 @@ const ReviewApp: React.FC = () => {
   allAnnotationsRef.current = allAnnotations;
   const visibleAnnotations = useMemo(
     () => allAnnotations.filter((annotation) =>
-      annotationMatchesPrScope(annotation, prMetadata?.url, prDiffScope)),
+      annotationMatchesReviewContext(annotation, prMetadata?.url, prDiffScope)),
     [allAnnotations, prDiffScope, prMetadata?.url],
   );
   const diffAnnotations = useMemo(
@@ -613,12 +618,7 @@ const ReviewApp: React.FC = () => {
     [visibleAnnotations],
   );
   const annotationSummary = useMemo(
-    () => visibleAnnotations.map((annotation) => {
-      const lines = annotation.lineStart === annotation.lineEnd
-        ? String(annotation.lineStart)
-        : `${annotation.lineStart}-${annotation.lineEnd}`;
-      return `- ${annotation.filePath}:${lines}: ${annotation.text ?? annotation.type}`;
-    }).join('\n'),
+    () => visibleAnnotations.map(formatAnnotationAIContext).join('\n'),
     [visibleAnnotations],
   );
 
@@ -1072,6 +1072,7 @@ const ReviewApp: React.FC = () => {
     activeCommitContext,
     activeGitButlerContext,
   );
+  const { withPRContext: withAtlasPRContext } = useAnnotationFactory(prMetadata);
 
   // Context rule shared by both auto-open effects below (and mirrored by
   // GuideScreen's matchesContext): a job stamped with a PR url only belongs
@@ -1593,8 +1594,8 @@ const ReviewApp: React.FC = () => {
       source: 'atlas',
       atlasSnapshotGeneratedAt: draft.snapshotGeneratedAt,
     };
-    setAnnotations((current) => [...current, withPRContext(annotation)]);
-  }, [identity, withPRContext]);
+    setAnnotations((current) => [...current, withAtlasPRContext(annotation)]);
+  }, [identity, withAtlasPRContext]);
 
   // Edit annotation
   const handleEditAnnotation = useCallback((
@@ -2393,7 +2394,7 @@ const ReviewApp: React.FC = () => {
     // silently no-opping, so the click still gives visible feedback rather than
     // appearing broken (e.g. after an in-place PR switch leaves stale sidebar
     // cards listed).
-    if (!annotation || !annotationMatchesPrScope(annotation, prMetadata?.url, prDiffScope)) {
+    if (!annotation || !annotationMatchesReviewContext(annotation, prMetadata?.url, prDiffScope)) {
       setSelectedAnnotationId(null);
       return;
     }

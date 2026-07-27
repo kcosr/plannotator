@@ -98,6 +98,25 @@ describe("parseReviewScopeDiff", () => {
     });
   });
 
+  test("counts hunk content whose payload starts with diff marker characters", () => {
+    const diff = parseReviewScopeDiff([
+      "diff --git a/notes.md b/notes.md",
+      "--- a/notes.md",
+      "+++ b/notes.md",
+      "@@ -1 +1 @@",
+      "--- removed heading",
+      "+++ added heading",
+      "",
+    ].join("\n"));
+
+    expect(diff.files[0]).toMatchObject({
+      additions: 1,
+      deletions: 1,
+      oldChangedRanges: [{ startLine: 1, endLine: 1 }],
+      newChangedRanges: [{ startLine: 1, endLine: 1 }],
+    });
+  });
+
   test("parses header-only rename and copy changes", () => {
     const diff = parseReviewScopeDiff([
       "diff --git a/old.ts b/new.ts",

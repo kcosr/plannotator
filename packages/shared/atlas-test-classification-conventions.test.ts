@@ -6,10 +6,11 @@ function item(
 	name: string,
 	startLine: number,
 	endLine: number,
+	symbolType = "function",
 ): StructuralItem {
 	return {
 		role: "item",
-		symbolType: "function",
+		symbolType,
 		name,
 		range: {
 			start: { line: startLine - 1, column: 0 },
@@ -27,7 +28,7 @@ function outline(language: string, items: StructuralItem[]): StructuralFileOutli
 }
 
 describe("conventional Atlas test classification", () => {
-	test("classifies Python test files and inline test symbols", () => {
+	test("classifies Python test files without treating production names as tests", () => {
 		expect(
 			classifyConventionalTestRanges(
 				"python",
@@ -49,12 +50,33 @@ describe("conventional Atlas test classification", () => {
 				"def live():\n    pass\n\ndef test_inline():\n    pass\n",
 				outline("python", [item("live", 1, 2), item("test_inline", 4, 5)]),
 			),
-		).toEqual([expect.objectContaining({
-			startLine: 4,
-			endLine: 5,
-			reason: "python-test-symbol",
-			confidence: "semantic",
-		})]);
+		).toEqual([]);
+	});
+
+	test("does not classify Python and Ruby production symbols by name alone", () => {
+		expect(
+			classifyConventionalTestRanges(
+				"python",
+				"src/service.py",
+				"class TestService:\n    pass\n\ndef TestFactory():\n    pass\n",
+				outline("python", [
+					item("TestService", 1, 2, "class"),
+					item("TestFactory", 4, 5),
+				]),
+			),
+		).toEqual([]);
+
+		expect(
+			classifyConventionalTestRanges(
+				"ruby",
+				"lib/service.rb",
+				"class test_helper\nend\n\ndef test_inline\nend\n",
+				outline("ruby", [
+					item("test_helper", 1, 2, "class"),
+					item("test_inline", 4, 5, "method"),
+				]),
+			),
+		).toEqual([]);
 	});
 
 	test("classifies Go test files", () => {
@@ -119,7 +141,7 @@ describe("conventional Atlas test classification", () => {
 		})]);
 	});
 
-	test("classifies Ruby spec files and test methods", () => {
+	test("classifies Ruby spec files without treating production names as tests", () => {
 		expect(
 			classifyConventionalTestRanges(
 				"ruby",
@@ -136,10 +158,6 @@ describe("conventional Atlas test classification", () => {
 				"def live\nend\n\ndef test_inline\nend\n",
 				outline("ruby", [item("live", 1, 2), item("test_inline", 4, 5)]),
 			),
-		).toEqual([expect.objectContaining({
-			startLine: 4,
-			endLine: 5,
-			reason: "ruby-test-symbol",
-		})]);
+		).toEqual([]);
 	});
 });

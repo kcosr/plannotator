@@ -32,6 +32,7 @@ export interface AtlasSnapshotBuildContext {
 	rootPath: string;
 	repositoryFingerprint: string;
 	forced: boolean;
+	signal: AbortSignal;
 }
 
 export interface AtlasSnapshotGeneration {
@@ -45,7 +46,10 @@ export interface OpenAtlasIndexSessionOptions {
 	cache?: AtlasSnapshotCache;
 	cacheOptions?: Omit<OpenAtlasSnapshotCacheOptions, "rootPath">;
 	fingerprintOptions?: AtlasRepositoryFingerprintOptions;
-	collectFingerprint?: (rootPath: string) => Promise<string>;
+	collectFingerprint?: (
+		rootPath: string,
+		signal?: AbortSignal,
+	) => Promise<string>;
 }
 
 function isRecord(value: unknown): value is Record<string, unknown> {
@@ -71,11 +75,15 @@ export class AtlasIndexSession {
 
 	#buildSnapshot: OpenAtlasIndexSessionOptions["buildSnapshot"];
 	#cache: AtlasSnapshotCache;
-	#collectFingerprint: (rootPath: string) => Promise<string>;
+	#collectFingerprint: (
+		rootPath: string,
+		signal?: AbortSignal,
+	) => Promise<string>;
 	#snapshot: AtlasSnapshot | undefined;
 	#snapshotFingerprint: string | undefined;
 	#status: AtlasIndexSessionStatus;
 	#activeWork: Promise<void> | undefined;
+	#activeAbortController: AbortController | undefined;
 	#forcedRunQueued = false;
 	#started = false;
 	#disposed = false;
@@ -89,10 +97,17 @@ export class AtlasIndexSession {
 		this.#buildSnapshot = options.buildSnapshot;
 		this.#cache = cache;
 		this.#collectFingerprint = options.collectFingerprint ??
-			(async (repositoryRoot) =>
+			(async (repositoryRoot, signal) =>
 				(await collectAtlasRepositoryFingerprint(
 					repositoryRoot,
-					options.fingerprintOptions,
+					{
+						...options.fingerprintOptions,
+						signal,
+						excludedPaths: [
+							...(options.fingerprintOptions?.excludedPaths ?? []),
+							cache.indexPath,
+						],
+					},
 				)).fingerprint);
 
 		this.#status = {
@@ -164,6 +179,9 @@ export class AtlasIndexSession {
 		}
 		this.#disposed = true;
 		this.#forcedRunQueued = false;
+		this.#activeAbortController?.abort(
+			new Error("Atlas index session was disposed"),
+		);
 		await this.#activeWork;
 		this.#cache.close();
 	}
@@ -174,26 +192,31 @@ export class AtlasIndexSession {
 
 		const initialForce = this.#forcedRunQueued;
 		this.#forcedRunQueued = false;
-		const work = this.#runLoop(initialForce);
+		const controller = new AbortController();
+		this.#activeAbortController = controller;
+		const work = this.#runLoop(initialForce, controller.signal);
 		this.#activeWork = work;
 		const clearActiveWork = () => {
-			if (this.#activeWork === work) this.#activeWork = undefined;
+			if (this.#activeWork === work) {
+				this.#activeWork = undefined;
+				this.#activeAbortController = undefined;
+			}
 		};
 		void work.then(clearActiveWork, clearActiveWork);
 		return work;
 	}
 
-	async #runLoop(initialForce: boolean): Promise<void> {
+	async #runLoop(initialForce: boolean, signal: AbortSignal): Promise<void> {
 		let force = initialForce;
 		do {
-			await this.#runOnce(force);
+			await this.#runOnce(force, signal);
 			if (this.#disposed) return;
 			force = this.#forcedRunQueued;
 			this.#forcedRunQueued = false;
 		} while (force);
 	}
 
-	async #runOnce(force: boolean): Promise<void> {
+	async #runOnce(force: boolean, signal: AbortSignal): Promise<void> {
 		this.#status = {
 			status: "indexing",
 			phase: "checking",
@@ -207,7 +230,11 @@ export class AtlasIndexSession {
 			}),
 		};
 		try {
-			let repositoryFingerprint = await this.#collectFingerprint(this.rootPath);
+			signal.throwIfAborted();
+			let repositoryFingerprint = await this.#collectFingerprint(
+				this.rootPath,
+				signal,
+			);
 			if (this.#disposed) return;
 			if (!force && !this.#snapshot) {
 				const cached = this.#cache.get({
@@ -273,9 +300,14 @@ export class AtlasIndexSession {
 					rootPath: this.rootPath,
 					repositoryFingerprint,
 					forced: force,
+					signal,
 				});
 				if (this.#disposed) return;
-				const afterBuildFingerprint = await this.#collectFingerprint(this.rootPath);
+				signal.throwIfAborted();
+				const afterBuildFingerprint = await this.#collectFingerprint(
+					this.rootPath,
+					signal,
+				);
 				if (afterBuildFingerprint === repositoryFingerprint) break;
 				if (attempt === MAX_STABILITY_ATTEMPTS) {
 					throw new Error("Repository kept changing while Atlas was indexing");

@@ -1512,8 +1512,34 @@ export async function startReviewServer(options: {
 					json(res, { error: "Line and column must be positive integers" }, 400);
 					return true;
 				}
-				const result = await atlasRuntime.references({ symbol, filePath, line, column });
-				json(res, result, "phase" in result ? (result.status === "error" ? 500 : 202) : 200);
+				const cancellation = new AbortController();
+				const abortRequest = () => cancellation.abort();
+				const abortResponse = () => {
+					if (!res.writableEnded) cancellation.abort();
+				};
+				req.once("aborted", abortRequest);
+				res.once("close", abortResponse);
+				try {
+					const result = await atlasRuntime.references({
+						symbol,
+						filePath,
+						line,
+						column,
+						signal: cancellation.signal,
+					});
+					if (!cancellation.signal.aborted) {
+						json(
+							res,
+							result,
+							"phase" in result
+								? (result.status === "error" ? 500 : 202)
+								: 200,
+						);
+					}
+				} finally {
+					req.off("aborted", abortRequest);
+					res.off("close", abortResponse);
+				}
 				return true;
 			}
 			if (method === "GET" && url.pathname === "/api/atlas/calls") {
@@ -1528,8 +1554,33 @@ export async function startReviewServer(options: {
 					json(res, { error: "Line and column must be positive integers" }, 400);
 					return true;
 				}
-				const result = await atlasRuntime.calls({ filePath, line, column });
-				json(res, result, "phase" in result ? (result.status === "error" ? 500 : 202) : 200);
+				const cancellation = new AbortController();
+				const abortRequest = () => cancellation.abort();
+				const abortResponse = () => {
+					if (!res.writableEnded) cancellation.abort();
+				};
+				req.once("aborted", abortRequest);
+				res.once("close", abortResponse);
+				try {
+					const result = await atlasRuntime.calls({
+						filePath,
+						line,
+						column,
+						signal: cancellation.signal,
+					});
+					if (!cancellation.signal.aborted) {
+						json(
+							res,
+							result,
+							"phase" in result
+								? (result.status === "error" ? 500 : 202)
+								: 200,
+						);
+					}
+				} finally {
+					req.off("aborted", abortRequest);
+					res.off("close", abortResponse);
+				}
 				return true;
 			}
 			if (method === "POST" && url.pathname === "/api/atlas/index") {
@@ -1546,7 +1597,14 @@ export async function startReviewServer(options: {
 				}
 				return true;
 			}
-			throw error;
+			if (req.aborted || res.destroyed) return true;
+			console.error("[plannotator] Atlas request failed:", error);
+			if (!res.headersSent) {
+				json(res, { error: "Atlas request failed" }, 500);
+			} else if (!res.writableEnded) {
+				res.end();
+			}
+			return true;
 		}
 	};
 

@@ -107,6 +107,39 @@ describe("collectAtlasRepositoryFingerprint", () => {
 		expect(oneFile.fingerprint).not.toBe(twoFiles.fingerprint);
 	});
 
+	test("excludes a configured in-repository database and SQLite siblings", async () => {
+		const root = repository();
+		mkdirSync(join(root, "cache"));
+		writeFileSync(join(root, "main.ts"), "export const value = 1;\n");
+		const databasePath = join(root, "cache", "custom.sqlite3");
+		for (const suffix of ["", "-journal", "-shm", "-wal"]) {
+			writeFileSync(`${databasePath}${suffix}`, `initial${suffix}\n`);
+		}
+
+		const options = { excludedPaths: [databasePath] };
+		const initial = await collectAtlasRepositoryFingerprint(root, options);
+		for (const suffix of ["", "-journal", "-shm", "-wal"]) {
+			writeFileSync(`${databasePath}${suffix}`, `changed${suffix}\n`);
+		}
+		expect((await collectAtlasRepositoryFingerprint(root, options)).fingerprint)
+			.toBe(initial.fingerprint);
+
+		writeFileSync(join(root, "main.ts"), "export const value = 2;\n");
+		expect((await collectAtlasRepositoryFingerprint(root, options)).fingerprint)
+			.not.toBe(initial.fingerprint);
+	});
+
+	test("honors cancellation while collecting a fingerprint", async () => {
+		const root = repository();
+		writeFileSync(join(root, "main.ts"), "export const value = 1;\n");
+		const controller = new AbortController();
+		controller.abort(new Error("cancel fingerprint"));
+
+		await expect(
+			collectAtlasRepositoryFingerprint(root, { signal: controller.signal }),
+		).rejects.toThrow("cancel fingerprint");
+	});
+
 	test("streams complete oversized files into the fingerprint", async () => {
 		const root = repository();
 		writeFileSync(join(root, "large.txt"), "prefix\nmiddle\nsuffix\n");

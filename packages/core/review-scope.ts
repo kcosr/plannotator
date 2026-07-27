@@ -301,11 +301,11 @@ function parseHunk(lines: string[], startIndex: number): {
     const line = lines[index]!;
     if (line.startsWith("@@ ") || line.startsWith("diff --git ")) break;
     if (line.startsWith("\\")) continue;
-    if (line.startsWith("-") && !line.startsWith("--- ")) {
+    if (line.startsWith("-")) {
       appendLine(oldChangedRanges, oldLine);
       oldLine += 1;
       deletions += 1;
-    } else if (line.startsWith("+") && !line.startsWith("+++ ")) {
+    } else if (line.startsWith("+")) {
       appendLine(newChangedRanges, newLine);
       newLine += 1;
       additions += 1;

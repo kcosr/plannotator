@@ -74,7 +74,12 @@ export interface AtlasStructureRuntime {
 	runCommand: (
 		command: string,
 		args: string[],
-		options?: { cwd?: string; timeoutMs?: number; maxOutputBytes?: number },
+		options?: {
+			cwd?: string;
+			timeoutMs?: number;
+			maxOutputBytes?: number;
+			signal?: AbortSignal;
+		},
 	) => Promise<CommandResult>;
 	fileExists: (path: string) => boolean;
 	env: Record<string, string | undefined>;
@@ -87,7 +92,12 @@ export interface AtlasStructureRuntime {
 function defaultRunCommand(
 	command: string,
 	args: string[],
-	options: { cwd?: string; timeoutMs?: number; maxOutputBytes?: number } = {},
+	options: {
+		cwd?: string;
+		timeoutMs?: number;
+		maxOutputBytes?: number;
+		signal?: AbortSignal;
+	} = {},
 ): Promise<CommandResult> {
 	return new Promise((resolveResult) => {
 		let settled = false;
@@ -108,6 +118,7 @@ function defaultRunCommand(
 			proc = spawn(command, args, {
 				cwd: options.cwd,
 				stdio: ["ignore", "pipe", "pipe"],
+				signal: options.signal,
 			});
 		} catch (error) {
 			finish({
@@ -248,8 +259,10 @@ function supportsOutline(version: string): boolean {
 
 async function resolveAstGrep(
 	runtime: AtlasStructureRuntime,
+	signal?: AbortSignal,
 ): Promise<{ command: string; analyzer: Omit<AtlasStructuralAnalyzer, "languages"> }> {
 	for (const candidate of astGrepCandidates(runtime)) {
+		signal?.throwIfAborted();
 		if (candidate.explicit && !runtime.fileExists(candidate.command)) {
 			throw new Error(
 				`PLANNOTATOR_AST_GREP_PATH points to a missing file: ${candidate.command}`,
@@ -258,7 +271,9 @@ async function resolveAstGrep(
 		const versionResult = await runtime.runCommand(candidate.command, ["--version"], {
 			timeoutMs: VERSION_TIMEOUT_MS,
 			maxOutputBytes: 16 * 1024,
+			signal,
 		});
+		signal?.throwIfAborted();
 		const version = parseAstGrepVersion(versionResult.stdout);
 		if (versionResult.exitCode === 0 && version && supportsOutline(version)) {
 			return {
@@ -381,11 +396,14 @@ export async function analyzeAtlasStructure(
 	rootPath: string,
 	filePaths: string[],
 	runtime: AtlasStructureRuntime = createDefaultAtlasStructureRuntime(),
+	signal?: AbortSignal,
 ): Promise<AtlasStructureResult> {
-	const resolved = await resolveAstGrep(runtime);
+	signal?.throwIfAborted();
+	const resolved = await resolveAstGrep(runtime, signal);
 	const files = new Map<string, StructuralFileOutline>();
 
 	for (let offset = 0; offset < filePaths.length; offset += OUTLINE_BATCH_SIZE) {
+		signal?.throwIfAborted();
 		const batch = filePaths.slice(offset, offset + OUTLINE_BATCH_SIZE);
 		const result = await runtime.runCommand(
 			resolved.command,
@@ -403,8 +421,10 @@ export async function analyzeAtlasStructure(
 				cwd: rootPath,
 				timeoutMs: OUTLINE_TIMEOUT_MS,
 				maxOutputBytes: MAX_OUTLINE_OUTPUT_BYTES,
+				signal,
 			},
 		);
+		signal?.throwIfAborted();
 		if (result.exitCode !== 0) {
 			const detail = result.error ?? (result.stderr.trim() || `exit code ${result.exitCode}`);
 			throw new Error(`ast-grep could not build the repository outline: ${detail}`);

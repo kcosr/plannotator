@@ -199,7 +199,33 @@ describe("classifyCFamilyTestRanges", () => {
 		]);
 	});
 
-	test("classifies Unity test functions but not lifecycle or helper functions", () => {
+	test("recognizes Catch2 and doctest includes under vendored prefixes", () => {
+		for (const [includePath, macro] of [
+			["vendor/catch2/catch_test_macros.hpp", "TEST_CASE"],
+			["third_party/doctest/doctest.h", "DOCTEST_TEST_CASE"],
+		] as const) {
+			const source = [
+				`#include <${includePath}>`,
+				`${macro}("parses") {`,
+				"  CHECK(true);",
+				"}",
+			].join("\n");
+			expect(classifyCFamilyTestRanges(
+				"src/parser_spec.cpp",
+				source,
+				outline("src/parser_spec.cpp", [
+					include(includePath),
+					functionItem(macro, 2, 4),
+				]),
+			)).toEqual([expect.objectContaining({
+				startLine: 2,
+				endLine: 4,
+				reason: "c-family-test-macro",
+			})]);
+		}
+	});
+
+	test("classifies only Unity functions registered with RUN_TEST", () => {
 		const source = [
 			"#include <unity.h>",
 			"void setUp(void) {}",
@@ -207,6 +233,9 @@ describe("classifyCFamilyTestRanges", () => {
 			"  TEST_ASSERT_TRUE(1);",
 			"}",
 			"void testing_helper(void) {}",
+			"void test_parser_helper(void) {}",
+			"RUN_TEST(test_parser_accepts_input);",
+			"// RUN_TEST(test_parser_helper);",
 		].join("\n");
 		expect(classifyCFamilyTestRanges(
 			"src/parser_spec.c",
@@ -216,6 +245,7 @@ describe("classifyCFamilyTestRanges", () => {
 				functionItem("setUp", 2, 2),
 				functionItem("test_parser_accepts_input", 3, 5),
 				functionItem("testing_helper", 6, 6),
+				functionItem("test_parser_helper", 7, 7),
 			], "C"),
 		)).toEqual([{
 			startLine: 3,

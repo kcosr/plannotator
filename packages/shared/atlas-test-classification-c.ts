@@ -149,10 +149,20 @@ function detectedFrameworks(
 		}
 		if (path.startsWith("boost/test/")) frameworks.add("boost-test");
 		if (path.startsWith("criterion/")) frameworks.add("criterion");
-		if (path.startsWith("catch2/") || path === "catch.hpp") {
+		if (
+			path === "catch.hpp" ||
+			path.endsWith("/catch.hpp") ||
+			path.startsWith("catch2/") ||
+			path.includes("/catch2/")
+		) {
 			frameworks.add("catch2");
 		}
-		if (path.startsWith("doctest/") || path === "doctest.h") {
+		if (
+			path === "doctest.h" ||
+			path.endsWith("/doctest.h") ||
+			path.startsWith("doctest/") ||
+			path.includes("/doctest/")
+		) {
 			frameworks.add("doctest");
 		}
 		if (path === "unity.h" || path.endsWith("/unity.h")) {
@@ -199,8 +209,70 @@ function isOutlineTestMacro(
 	);
 }
 
-function isUnityTestFunction(name: string): boolean {
-	return name === "test" || /^test(?:_|[A-Z0-9])/.test(name);
+function unityRunTestNames(content: string): Set<string> {
+	const masked = content.split("");
+	let quote: "'" | '"' | null = null;
+	let lineComment = false;
+	let blockComment = false;
+	for (let index = 0; index < content.length; index += 1) {
+		const character = content[index]!;
+		const next = content[index + 1];
+		if (lineComment) {
+			if (character === "\n") {
+				lineComment = false;
+			} else {
+				masked[index] = " ";
+			}
+			continue;
+		}
+		if (blockComment) {
+			if (character === "\n") continue;
+			masked[index] = " ";
+			if (character === "*" && next === "/") {
+				masked[index + 1] = " ";
+				blockComment = false;
+				index += 1;
+			}
+			continue;
+		}
+		if (quote) {
+			if (character === "\n") continue;
+			masked[index] = " ";
+			if (character === "\\") {
+				if (next !== "\n") masked[index + 1] = " ";
+				index += 1;
+				continue;
+			}
+			if (character === quote) quote = null;
+			continue;
+		}
+		if (character === "/" && next === "/") {
+			masked[index] = " ";
+			masked[index + 1] = " ";
+			lineComment = true;
+			index += 1;
+			continue;
+		}
+		if (character === "/" && next === "*") {
+			masked[index] = " ";
+			masked[index + 1] = " ";
+			blockComment = true;
+			index += 1;
+			continue;
+		}
+		if (character === "'" || character === '"') {
+			masked[index] = " ";
+			quote = character;
+		}
+	}
+
+	const names = new Set<string>();
+	for (const match of masked.join("").matchAll(
+		/\bRUN_TEST\s*\(\s*([A-Za-z_]\w*)\s*(?:,|\))/g,
+	)) {
+		names.add(match[1]!);
+	}
+	return names;
 }
 
 function normalizeRanges(ranges: CFamilyTestRange[]): CFamilyTestRange[] {
@@ -245,6 +317,9 @@ export function classifyCFamilyTestRanges(
 	}
 
 	const frameworks = detectedFrameworks(content, outline);
+	const unityTests = frameworks.has("unity")
+		? unityRunTestNames(content)
+		: new Set<string>();
 	const ranges: CFamilyTestRange[] = [];
 	for (const item of outline?.items ?? []) {
 		if (
@@ -262,7 +337,7 @@ export function classifyCFamilyTestRanges(
 		if (
 			frameworks.has("unity") &&
 			item.astKind === "function_definition" &&
-			isUnityTestFunction(item.name)
+			unityTests.has(item.name)
 		) {
 			const range = semanticRange(
 				item.range,

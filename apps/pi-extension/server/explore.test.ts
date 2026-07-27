@@ -193,6 +193,41 @@ describe("Pi Codebase Atlas server", () => {
 		});
 	});
 
+	test("returns graceful semantic fallbacks for files without an LSP provider", async () => {
+		process.env.PLANNOTATOR_PORT = "0";
+		process.env.PLANNOTATOR_REMOTE = "0";
+		const { root } = createFixture();
+		writeFileSync(join(root, "notes.txt"), "Architecture notes\n");
+		const server = await startExploreServer({
+			rootPath: root,
+			htmlContent: "<!doctype html>",
+			indexPath: join(root, ".atlas.sqlite3"),
+		});
+		activeServers.add(server);
+		await waitForSnapshot(server.url);
+
+		const references = await fetch(
+			`${server.url}/api/atlas/references?symbol=Architecture&path=notes.txt&line=1&column=1`,
+		);
+		expect(references.status).toBe(200);
+		expect(await references.json()).toMatchObject({
+			definitions: [],
+			references: [],
+			provider: { kind: "syntax", status: "unavailable" },
+		});
+
+		const calls = await fetch(
+			`${server.url}/api/atlas/calls?path=notes.txt&line=1&column=1`,
+		);
+		expect(calls.status).toBe(200);
+		expect(await calls.json()).toMatchObject({
+			root: null,
+			callers: [],
+			callees: [],
+			provider: { kind: "lsp", status: "unavailable" },
+		});
+	});
+
 	test("releases close waiters when stopped programmatically", async () => {
 		process.env.PLANNOTATOR_PORT = "0";
 		process.env.PLANNOTATOR_REMOTE = "0";
@@ -220,6 +255,19 @@ describe("Pi Codebase Atlas server", () => {
 			indexPath: join(root, ".atlas.sqlite3"),
 		});
 		activeServers.add(server);
+
+		const oversized = await fetch(`${server.url}/api/atlas/feedback`, {
+			method: "POST",
+			headers: { "Content-Type": "application/json" },
+			body: JSON.stringify({
+				annotations: Array.from({ length: 501 }, () => ({})),
+				markdown: "Too many",
+			}),
+		});
+		expect(oversized.status).toBe(400);
+		expect(await oversized.json()).toEqual({
+			error: "Annotations must contain at most 500 items",
+		});
 
 		const invalid = await fetch(`${server.url}/api/atlas/feedback`, {
 			method: "POST",

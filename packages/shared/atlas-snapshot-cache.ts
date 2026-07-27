@@ -7,6 +7,7 @@ import type { AtlasSnapshot } from "./atlas";
 export const ATLAS_SNAPSHOT_CACHE_SCHEMA_VERSION = 2;
 
 const DEFAULT_INDEX_PATH = join(".plannotator", "atlas.sqlite3");
+const MAX_SNAPSHOTS_PER_VERSION = 8;
 
 interface SqliteStatement {
 	get(...parameters: unknown[]): unknown;
@@ -118,7 +119,7 @@ function initializeSchema(database: SqliteDatabase): void {
 	if (storedVersion !== ATLAS_SNAPSHOT_CACHE_SCHEMA_VERSION) {
 		database.exec(`
 			DROP TABLE IF EXISTS atlas_snapshots;
-			DELETE FROM atlas_cache_metadata;
+			DELETE FROM atlas_cache_metadata WHERE key = 'schema_version';
 		`);
 	}
 
@@ -312,13 +313,28 @@ export class AtlasSnapshotCache {
 					serialized,
 					new Date().toISOString(),
 				);
+				this.#database.prepare(`
+					DELETE FROM atlas_snapshots
+					WHERE snapshot_version = ?
+						AND rowid NOT IN (
+							SELECT rowid
+							FROM atlas_snapshots
+							WHERE snapshot_version = ?
+							ORDER BY created_at DESC, rowid DESC
+							LIMIT ?
+						)
+				`).run(
+					key.snapshotVersion,
+					key.snapshotVersion,
+					MAX_SNAPSHOTS_PER_VERSION,
+				);
 				this.#database.exec("COMMIT");
 			} catch (error) {
 				this.#database.exec("ROLLBACK");
 				throw error;
-				}
-				this.#lastError = undefined;
-				return true;
+			}
+			this.#lastError = undefined;
+			return true;
 		} catch (error) {
 			this.#lastError = error instanceof Error ? error.message : String(error);
 			return false;

@@ -134,12 +134,6 @@ export function classifyConventionalTestRanges(
 	const lines = content.split(/\r\n|\r|\n/);
 	const ranges: AtlasTestRange[] = [];
 	for (const entry of flattenEntries(outline)) {
-		if (language === "python" && /^(?:test_|Test[A-Z_])/.test(entry.name)) {
-			ranges.push(entryRange(entry, "python-test-symbol"));
-		}
-		if (language === "ruby" && /^test_/.test(entry.name)) {
-			ranges.push(entryRange(entry, "ruby-test-symbol"));
-		}
 		if (language === "java") {
 			const annotationLine = leadingJavaTestAnnotationLine(lines, entry);
 			if (annotationLine !== null) {

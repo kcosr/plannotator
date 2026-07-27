@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, test } from 'bun:test';
 import {
+  AtlasRequestError,
   fetchCallHierarchy,
   fetchReferences,
   fetchStatus,
@@ -105,5 +106,44 @@ describe('Atlas index lifecycle', () => {
 
     expect(requestedUrl).toBe('/api/atlas/index');
     expect(requestedMethod).toBe('POST');
+  });
+
+  test('preserves typed non-retryable capability failures', async () => {
+    globalThis.fetch = (async () => Response.json({
+      error: 'This review does not have a local repository checkout.',
+      capability: {
+        available: false,
+        code: 'no-local-checkout',
+        message: 'This review does not have a local repository checkout.',
+        retryable: false,
+      },
+    }, { status: 409 })) as typeof fetch;
+
+    const error = await fetchStatus().catch((reason) => reason);
+
+    expect(error).toBeInstanceOf(AtlasRequestError);
+    expect(error).toMatchObject({
+      message: 'This review does not have a local repository checkout.',
+      status: 409,
+      retryable: false,
+      capability: {
+        code: 'no-local-checkout',
+        retryable: false,
+      },
+    });
+  });
+
+  test('marks transient server failures as retryable', async () => {
+    globalThis.fetch = (async () => Response.json({
+      error: 'Indexer temporarily unavailable',
+    }, { status: 503 })) as typeof fetch;
+
+    const error = await fetchStatus().catch((reason) => reason);
+
+    expect(error).toMatchObject({
+      message: 'Indexer temporarily unavailable',
+      status: 503,
+      retryable: true,
+    });
   });
 });

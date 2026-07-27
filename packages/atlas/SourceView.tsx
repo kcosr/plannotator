@@ -147,6 +147,28 @@ function navigationSelection(
   return { start: line, end: line };
 }
 
+type ScrollRetryTimer = ReturnType<typeof setTimeout>;
+
+export function scheduleScrollRetry(
+  attempt: () => boolean,
+  schedule: (callback: () => void, delay: number) => ScrollRetryTimer = setTimeout,
+  cancel: (timer: ScrollRetryTimer) => void = clearTimeout,
+  delays: readonly number[] = [0, 40, 100, 200, 400, 800],
+): () => void {
+  let cancelled = false;
+  let timer: ScrollRetryTimer | undefined;
+  let index = 0;
+  const run = () => {
+    if (cancelled || attempt() || index >= delays.length) return;
+    timer = schedule(run, delays[index++]!);
+  };
+  run();
+  return () => {
+    cancelled = true;
+    if (timer !== undefined) cancel(timer);
+  };
+}
+
 function ReferenceGroup({
   title,
   locations,
@@ -322,6 +344,8 @@ export function SourceView({
   const symbolListRef = useRef<HTMLDivElement>(null);
   const referenceRequestRef = useRef<AbortController | null>(null);
   const suppressTokenLineClearRef = useRef(false);
+  const suppressTokenTimerRef = useRef<number | undefined>(undefined);
+  const copyResetTimerRef = useRef<number | undefined>(undefined);
   const renderStateRef = useRef({ node, codeFilter, navigationHighlight, annotations });
   renderStateRef.current = { node, codeFilter, navigationHighlight, annotations };
 
@@ -360,11 +384,11 @@ export function SourceView({
     );
   }, [source, query, node, codeFilter]);
 
-  const scrollToLine = useCallback((line: number) => {
+  const scrollToLine = useCallback((line: number): boolean => {
     const container = hostRef.current?.querySelector('diffs-container') as HTMLElement & { shadowRoot: ShadowRoot } | null;
     const scrollArea = container?.shadowRoot?.querySelector('[data-code]') as HTMLElement | null;
     const lineElement = container?.shadowRoot?.querySelector(`[data-line="${line}"]`) as HTMLElement | null;
-    if (!scrollArea || !lineElement) return;
+    if (!scrollArea || !lineElement) return false;
     const scrollBounds = scrollArea.getBoundingClientRect();
     const lineBounds = lineElement.getBoundingClientRect();
     const top = scrollArea.scrollTop
@@ -376,6 +400,7 @@ export function SourceView({
       left: 0,
       behavior: 'auto',
     });
+    return true;
   }, []);
 
   const highlightLocation = useCallback((
@@ -415,8 +440,7 @@ export function SourceView({
       line: targetLine,
       column: targetColumn,
     });
-    const timeout = window.setTimeout(() => scrollToLine(targetLine), 180);
-    return () => window.clearTimeout(timeout);
+    return scheduleScrollRetry(() => scrollToLine(targetLine));
   }, [
     source,
     node,
@@ -509,8 +533,12 @@ export function SourceView({
     event.preventDefault();
     event.stopPropagation();
     suppressTokenLineClearRef.current = true;
-    window.setTimeout(() => {
+    if (suppressTokenTimerRef.current !== undefined) {
+      window.clearTimeout(suppressTokenTimerRef.current);
+    }
+    suppressTokenTimerRef.current = window.setTimeout(() => {
       suppressTokenLineClearRef.current = false;
+      suppressTokenTimerRef.current = undefined;
     }, 0);
     highlightLocation(position.line, position.column, 'line');
     inspectSymbol(position.symbol, position.line, position.column);
@@ -519,6 +547,32 @@ export function SourceView({
   const pierreFile = useMemo(() => source
     ? { name: node.name, contents: source.content }
     : null, [node.name, source]);
+
+  useEffect(() => () => {
+    if (suppressTokenTimerRef.current !== undefined) {
+      window.clearTimeout(suppressTokenTimerRef.current);
+    }
+    if (copyResetTimerRef.current !== undefined) {
+      window.clearTimeout(copyResetTimerRef.current);
+    }
+  }, []);
+
+  const copySource = useCallback(async () => {
+    if (!source) return;
+    try {
+      await navigator.clipboard.writeText(source.content);
+      setCopied(true);
+      if (copyResetTimerRef.current !== undefined) {
+        window.clearTimeout(copyResetTimerRef.current);
+      }
+      copyResetTimerRef.current = window.setTimeout(() => {
+        setCopied(false);
+        copyResetTimerRef.current = undefined;
+      }, 1200);
+    } catch {
+      setCopied(false);
+    }
+  }, [source]);
 
   const onLineClick = useCallback((props: LineEventBaseProps) => {
     if (suppressTokenLineClearRef.current) {
@@ -761,13 +815,7 @@ export function SourceView({
             type="button"
             className="atlas-icon-button"
             disabled={!source}
-            onClick={() => {
-              if (!source) return;
-              navigator.clipboard.writeText(source.content).then(() => {
-                setCopied(true);
-                window.setTimeout(() => setCopied(false), 1200);
-              });
-            }}
+            onClick={() => void copySource()}
             title={copied ? 'Copied' : 'Copy source'}
           ><Copy size={14} /></button>
         </div>

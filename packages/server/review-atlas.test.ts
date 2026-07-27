@@ -19,6 +19,7 @@ function repository(): string {
     join(root, "main.ts"),
     "export function main() {\n  return 1;\n}\n",
   );
+  writeFileSync(join(root, "notes.txt"), "Architecture notes\n");
   return root;
 }
 
@@ -95,7 +96,7 @@ for (const runtime of [
 
         const snapshot = await waitForSnapshot(server.url);
         expect(snapshot).not.toHaveProperty("rootPath");
-        expect((snapshot.summary as { files: number }).files).toBe(1);
+        expect((snapshot.summary as { files: number }).files).toBe(2);
 
         const source = await fetch(`${server.url}/api/atlas/source?path=main.ts`);
         expect(source.status).toBe(200);
@@ -105,6 +106,17 @@ for (const runtime of [
           `${server.url}/api/atlas/source?path=${encodeURIComponent("../secret.ts")}`,
         );
         expect(traversal.status).toBe(404);
+
+        if (runtime.name === "Pi") {
+          const semanticFailure = await fetch(
+            `${server.url}/api/atlas/references?symbol=Architecture&path=notes.txt&line=1&column=1`,
+          );
+          expect(semanticFailure.status).toBe(500);
+          expect(semanticFailure.headers.get("content-type")).toContain("application/json");
+          expect(await semanticFailure.json()).toEqual({
+            error: "Atlas request failed",
+          });
+        }
       } finally {
         await server.stop();
       }

@@ -15,6 +15,7 @@ import {
 } from 'lucide-react';
 import {
   AtlasWorkspace,
+  AtlasRequestError,
   fetchCallHierarchy,
   fetchReferences,
   fetchSnapshot,
@@ -72,8 +73,8 @@ interface ReviewAtlasSurfaceProps {
 
 type AtlasSurfaceState =
   | { kind: 'loading'; message: string }
-  | { kind: 'unavailable'; message: string }
-  | { kind: 'error'; message: string }
+  | { kind: 'unavailable'; message: string; retryable: boolean }
+  | { kind: 'error'; message: string; retryable: boolean }
   | { kind: 'ready'; status: AtlasIndexStatus; snapshot: AtlasSnapshot };
 
 type ImpactState =
@@ -107,9 +108,26 @@ function errorMessage(reason: unknown): string {
   return reason instanceof Error ? reason.message : String(reason);
 }
 
-function isUnavailableError(reason: unknown): boolean {
-  const message = errorMessage(reason);
-  return /^(404|409)\b/.test(message) || /atlas.+(?:unavailable|disabled)/i.test(message);
+export function reviewAtlasRequestFailure(reason: unknown): {
+  unavailable: boolean;
+  message: string;
+  retryable: boolean;
+} {
+  if (reason instanceof AtlasRequestError) {
+    return {
+      unavailable:
+        reason.capability?.available === false
+        || reason.status === 404
+        || reason.status === 409,
+      message: reason.capability?.message || reason.message,
+      retryable: reason.retryable,
+    };
+  }
+  return {
+    unavailable: false,
+    message: errorMessage(reason),
+    retryable: true,
+  };
 }
 
 function AtlasSurfaceStatus({
@@ -139,7 +157,7 @@ function AtlasSurfaceStatus({
             : 'Could not load codebase map'}
       </strong>
       <span>{state.message}</span>
-      {!loading && (
+      {state.kind !== 'loading' && state.retryable && (
         <button type="button" onClick={onRetry}>
           <RefreshCw size={13} aria-hidden />
           Retry
@@ -441,12 +459,15 @@ export function ReviewAtlasSurface({
         } else if (status.phase === 'checking' || status.phase === 'indexing') {
           setSurfaceState({
             kind: 'loading',
-            message: 'Indexing files, symbols, and module relationships...',
+            message:
+              status.capability?.message
+              || 'Indexing files, symbols, and module relationships...',
           });
         } else {
           setSurfaceState({
             kind: 'error',
             message: status.error || 'The repository index did not produce a snapshot.',
+            retryable: true,
           });
         }
 
@@ -456,9 +477,9 @@ export function ReviewAtlasSurface({
         timer = setTimeout(poll, working ? 900 : 3000);
       } catch (reason) {
         if (disposed || controller.signal.aborted) return;
-        const unavailable = isUnavailableError(reason);
+        const failure = reviewAtlasRequestFailure(reason);
         const snapshot = snapshotRef.current;
-        if (snapshot && !unavailable) {
+        if (snapshot && !failure.unavailable) {
           setSurfaceState({
             kind: 'ready',
             status: {
@@ -468,19 +489,18 @@ export function ReviewAtlasSurface({
               revision: loadedRevisionRef.current ?? 0,
               refreshing: false,
               persistent: false,
-              error: errorMessage(reason),
+              error: failure.message,
             },
             snapshot,
           });
         } else {
           setSurfaceState({
-            kind: unavailable ? 'unavailable' : 'error',
-            message: unavailable
-              ? 'This review session does not expose Atlas indexing endpoints.'
-              : errorMessage(reason),
+            kind: failure.unavailable ? 'unavailable' : 'error',
+            message: failure.message,
+            retryable: failure.retryable,
           });
         }
-        timer = setTimeout(poll, 3000);
+        if (failure.retryable) timer = setTimeout(poll, 3000);
       }
     };
 
@@ -693,7 +713,7 @@ export function ReviewAtlasSurface({
     return (
       <AtlasSurfaceStatus
         state={surfaceState.kind === 'ready'
-          ? { kind: 'error', message: 'The repository index is empty.' }
+          ? { kind: 'error', message: 'The repository index is empty.', retryable: true }
           : surfaceState}
         onRetry={() => setLoadKey((key) => key + 1)}
       />

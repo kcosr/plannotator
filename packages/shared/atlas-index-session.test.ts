@@ -348,32 +348,27 @@ describe("AtlasIndexSession", () => {
 		expect(session.getSnapshot()).toEqual(fresh);
 	});
 
-	test("dispose waits for active work and prevents a late snapshot swap", async () => {
+	test("dispose cancels active work and prevents a late snapshot swap", async () => {
 		const { root, databasePath } = temporaryRepository();
-		const build = deferred<AtlasSnapshot>();
 		let buildStarted = false;
 		const session = await AtlasIndexSession.open({
 			rootPath: root,
 			cacheOptions: { indexPath: databasePath },
 			collectFingerprint: async () => "fingerprint-a",
-			buildSnapshot: async () => {
+			buildSnapshot: async ({ signal }) => {
 				buildStarted = true;
-				return build.promise;
+				return new Promise<AtlasSnapshot>((_resolve, reject) => {
+					signal.addEventListener("abort", () => reject(signal.reason), {
+						once: true,
+					});
+				});
 			},
 		});
 		sessions.push(session);
 		session.start();
 		while (!buildStarted) await Promise.resolve();
 
-		let disposed = false;
-		const disposal = session.dispose().then(() => {
-			disposed = true;
-		});
-		await Promise.resolve();
-		expect(disposed).toBe(false);
-		build.resolve(snapshot(root, "2026-07-26T10:00:00.000Z"));
-		await disposal;
-		expect(disposed).toBe(true);
+		await session.dispose();
 		expect(session.getSnapshot()).toBeUndefined();
 	});
 });

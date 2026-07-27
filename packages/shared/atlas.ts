@@ -117,6 +117,7 @@ export interface BuildAtlasOptions {
 	maxFileBytes?: number;
 	maxTotalBytes?: number;
 	semanticProviders?: AtlasSemanticProviderCapability[];
+	signal?: AbortSignal;
 }
 
 export interface AtlasSemanticProviderCapability {
@@ -311,7 +312,12 @@ function analysisLanguageForFile(
 	};
 }
 
-async function listGitFiles(rootPath: string, maxFiles: number): Promise<string[] | null> {
+async function listGitFiles(
+	rootPath: string,
+	maxFiles: number,
+	signal?: AbortSignal,
+): Promise<string[] | null> {
+	signal?.throwIfAborted();
 	try {
 		const { stdout } = await execFileAsync(
 			"git",
@@ -328,8 +334,10 @@ async function listGitFiles(rootPath: string, maxFiles: number): Promise<string[
 				encoding: "buffer",
 				maxBuffer: MAX_GIT_OUTPUT_BYTES,
 				timeout: 15_000,
+				signal,
 			},
 		);
+		signal?.throwIfAborted();
 		return stdout
 			.toString("utf8")
 			.split("\0")
@@ -338,25 +346,33 @@ async function listGitFiles(rootPath: string, maxFiles: number): Promise<string[
 			.filter((filePath) => !isExcludedPath(filePath))
 			.slice(0, maxFiles);
 	} catch {
+		signal?.throwIfAborted();
 		return null;
 	}
 }
 
-async function listFilesystemFiles(rootPath: string, maxFiles: number): Promise<string[]> {
+async function listFilesystemFiles(
+	rootPath: string,
+	maxFiles: number,
+	signal?: AbortSignal,
+): Promise<string[]> {
 	const results: string[] = [];
 	const pending = [rootPath];
 
 	while (pending.length > 0 && results.length < maxFiles) {
+		signal?.throwIfAborted();
 		const directory = pending.pop()!;
 		let entries;
 		try {
 			entries = await readdir(directory, { withFileTypes: true });
 		} catch {
+			signal?.throwIfAborted();
 			continue;
 		}
 
 		entries.sort((a, b) => a.name.localeCompare(b.name));
 		for (let index = entries.length - 1; index >= 0; index -= 1) {
+			signal?.throwIfAborted();
 			const entry = entries[index]!;
 			const absolutePath = join(directory, entry.name);
 			const repositoryPath = normalizeRepositoryPath(relative(rootPath, absolutePath));
@@ -399,6 +415,7 @@ function countLines(content: string): number {
 async function inspectTextMetadata(
 	absolutePath: string,
 	fileBytes: number,
+	signal?: AbortSignal,
 ): Promise<{ binary: boolean; lines: number }> {
 	const chunks: Buffer[] = [];
 	let sampledBytes = 0;
@@ -407,7 +424,7 @@ async function inspectTextMetadata(
 	let endsWithLineBreak = false;
 	let scannedBytes = 0;
 
-	for await (const value of createReadStream(absolutePath)) {
+	for await (const value of createReadStream(absolutePath, { signal })) {
 		const chunk = Buffer.isBuffer(value) ? value : Buffer.from(value);
 		scannedBytes += chunk.length;
 		if (sampledBytes < 8_192) {
@@ -883,6 +900,7 @@ export async function buildAtlasSnapshot(
 	rootPath: string,
 	options: BuildAtlasOptions = {},
 ): Promise<AtlasSnapshot> {
+	options.signal?.throwIfAborted();
 	const resolvedRoot = await realpath(resolve(rootPath));
 	const rootStats = await stat(resolvedRoot);
 	if (!rootStats.isDirectory()) throw new Error("Atlas root must be a directory");
@@ -890,8 +908,9 @@ export async function buildAtlasSnapshot(
 	const maxFiles = positiveInteger(options.maxFiles, DEFAULT_MAX_FILES);
 	const maxFileBytes = positiveInteger(options.maxFileBytes, DEFAULT_MAX_FILE_BYTES);
 	const maxTotalBytes = positiveInteger(options.maxTotalBytes, DEFAULT_MAX_TOTAL_BYTES);
-	const gitFiles = await listGitFiles(resolvedRoot, maxFiles + 1);
-	const discoveredFiles = gitFiles ?? await listFilesystemFiles(resolvedRoot, maxFiles + 1);
+	const gitFiles = await listGitFiles(resolvedRoot, maxFiles + 1, options.signal);
+	const discoveredFiles = gitFiles ??
+		await listFilesystemFiles(resolvedRoot, maxFiles + 1, options.signal);
 	const truncatedByFileCount = discoveredFiles.length > maxFiles;
 	const candidatePaths = discoveredFiles.slice(0, maxFiles).sort();
 
@@ -905,6 +924,7 @@ export async function buildAtlasSnapshot(
 	let truncated = truncatedByFileCount;
 
 	for (const repositoryPath of candidatePaths) {
+		options.signal?.throwIfAborted();
 		const normalizedPath = normalizeRepositoryPath(repositoryPath);
 		if (
 			!normalizedPath ||
@@ -920,6 +940,7 @@ export async function buildAtlasSnapshot(
 		try {
 			fileStats = await lstat(absolutePath);
 		} catch {
+			options.signal?.throwIfAborted();
 			skippedFiles += 1;
 			continue;
 		}
@@ -935,8 +956,13 @@ export async function buildAtlasSnapshot(
 			truncated = true;
 			let metadata;
 			try {
-				metadata = await inspectTextMetadata(absolutePath, fileStats.size);
+				metadata = await inspectTextMetadata(
+					absolutePath,
+					fileStats.size,
+					options.signal,
+				);
 			} catch {
+				options.signal?.throwIfAborted();
 				skippedFiles += 1;
 				continue;
 			}
@@ -955,8 +981,9 @@ export async function buildAtlasSnapshot(
 
 		let bytes: Buffer;
 		try {
-			bytes = await readFile(absolutePath);
+			bytes = await readFile(absolutePath, { signal: options.signal });
 		} catch {
+			options.signal?.throwIfAborted();
 			skippedFiles += 1;
 			continue;
 		}
@@ -980,6 +1007,8 @@ export async function buildAtlasSnapshot(
 		acceptedFiles
 			.filter((file) => file.content !== null && languageForPath(file.path) !== null)
 			.map((file) => file.path),
+		undefined,
+		options.signal,
 	);
 	const acceptedPaths = new Set(acceptedFiles.map((file) => file.path));
 	const analysisLanguageByPath = new Map(

@@ -149,6 +149,27 @@ describe("AtlasSnapshotCache", () => {
 			expect(cache.get(secondKey, validateSnapshot)?.snapshot).toEqual(snapshot(root));
 	});
 
+	test("retains only the newest bounded set of snapshot generations", async () => {
+		const directory = temporaryDirectory();
+		const root = join(directory, "repo");
+		mkdirSync(root);
+		const cache = await cacheAt(join(directory, "atlas.sqlite3"));
+		const keys = Array.from({ length: 10 }, (_, index) => ({
+			repositoryFingerprint: `sha256:generation-${index}`,
+			snapshotVersion: 5,
+		}));
+
+		for (const key of keys) {
+			expect(cache.set(key, snapshot(root))).toBe(true);
+		}
+
+		expect(cache.get(keys[0]!, validateSnapshot)).toBeNull();
+		expect(cache.get(keys[1]!, validateSnapshot)).toBeNull();
+		for (const key of keys.slice(2)) {
+			expect(cache.get(key, validateSnapshot)?.snapshot).toEqual(snapshot(root));
+		}
+	});
+
 	test("evicts snapshots rejected by the caller validator", async () => {
 		const directory = temporaryDirectory();
 		const root = join(directory, "repo");
@@ -268,6 +289,8 @@ describe("AtlasSnapshotCache", () => {
 			[
 				"const { DatabaseSync } = require('node:sqlite');",
 				"const db = new DatabaseSync(process.argv[1]);",
+				"db.exec('CREATE TABLE atlas_cache_metadata (key TEXT PRIMARY KEY, value TEXT NOT NULL)');",
+				"db.prepare('INSERT INTO atlas_cache_metadata (key, value) VALUES (?, ?)').run('semantic_schema_version', '27');",
 				"db.exec('CREATE TABLE atlas_snapshots (obsolete TEXT)');",
 				"db.close();",
 			].join(""),
@@ -283,6 +306,19 @@ describe("AtlasSnapshotCache", () => {
 		expect(cache.available).toBe(true);
 		expect(cache.set(key, snapshot(root))).toBe(true);
 		expect(cache.get(key, validateSnapshot)?.snapshot).toEqual(snapshot(root));
+		const metadata = spawnSync("node", [
+			"-e",
+			[
+				"const { DatabaseSync } = require('node:sqlite');",
+				"const db = new DatabaseSync(process.argv[1], { readOnly: true });",
+				"const row = db.prepare(\"SELECT value FROM atlas_cache_metadata WHERE key = 'semantic_schema_version'\").get();",
+				"process.stdout.write(row?.value ?? 'missing');",
+				"db.close();",
+			].join(""),
+			databasePath,
+		], { encoding: "utf8" });
+		expect(metadata.status).toBe(0);
+		expect(metadata.stdout).toBe("27");
 	});
 
 	test("places the default database inside the repository", () => {

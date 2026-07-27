@@ -148,6 +148,23 @@ function relationshipMap(
   return result;
 }
 
+export function atlasIndexFailure(
+  current: AtlasIndexStatus,
+  reason: unknown,
+): { status: AtlasIndexStatus; message: string } {
+  const message = reason instanceof Error ? reason.message : String(reason);
+  return {
+    message,
+    status: {
+      ...current,
+      status: 'error',
+      phase: 'error',
+      refreshing: false,
+      error: message,
+    },
+  };
+}
+
 function useAtlasData() {
   const [indexStatus, setIndexStatus] = useState<AtlasIndexStatus>({
     status: 'indexing',
@@ -164,13 +181,7 @@ function useAtlasData() {
   const recordError = useCallback((reason: unknown) => {
     const message = reason instanceof Error ? reason.message : String(reason);
     setError(message);
-    setIndexStatus((current) => ({
-      ...current,
-      status: 'error',
-      phase: 'error',
-      refreshing: false,
-      error: message,
-    }));
+    setIndexStatus((current) => atlasIndexFailure(current, message).status);
   }, []);
 
   const load = useCallback(async (signal?: AbortSignal) => {
@@ -205,7 +216,8 @@ function useAtlasData() {
         await load(controller.signal);
       } catch (reason) {
         if (!controller.signal.aborted) {
-          setError(reason instanceof Error ? reason.message : String(reason));
+          recordError(reason);
+          return;
         }
       }
       if (!controller.signal.aborted) timeout = window.setTimeout(poll, 900);

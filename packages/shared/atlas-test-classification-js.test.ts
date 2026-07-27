@@ -95,6 +95,60 @@ describe("classifyJavaScriptTestRanges", () => {
 		]);
 	});
 
+	test("balances parameterized each and for factory calls", () => {
+		const lines = [
+			"import { describe, test } from 'vitest';",
+			"test.each(cases.map((item) => ({",
+			"  value: item,",
+			"})))('mapped %s', ({ value }) => {",
+			"  expect(value).toBeTruthy();",
+			"});",
+			"test.for([{ value: 1 }])(",
+			"  'scoped',",
+			"  ({ value }) => expect(value).toBe(1),",
+			");",
+		];
+		const fileOutline = outline("src/feature.ts", lines, [{
+			line: 1,
+			isImport: true,
+		}]);
+
+		expect(classifyJavaScriptTestRanges(
+			"src/feature.ts",
+			lines.join("\n"),
+			fileOutline,
+		)).toEqual([
+			expect.objectContaining({ startLine: 2, endLine: 6 }),
+			expect.objectContaining({ startLine: 7, endLine: 10 }),
+		]);
+	});
+
+	test("ignores test-like calls inside comments and strings", () => {
+		const lines = [
+			"import { test } from 'vitest';",
+			"/*",
+			"test('comment', () => {});",
+			"*/",
+			"const example = `",
+			"test('template', () => {});",
+			"`;",
+			"test('real', () => {});",
+		];
+		const fileOutline = outline("src/feature.ts", lines, [{
+			line: 1,
+			isImport: true,
+		}]);
+
+		expect(classifyJavaScriptTestRanges(
+			"src/feature.ts",
+			lines.join("\n"),
+			fileOutline,
+		)).toEqual([expect.objectContaining({
+			startLine: 8,
+			endLine: 8,
+		})]);
+	});
+
 	test("supports namespaces, default bindings, require aliases, and modifiers", () => {
 		const lines = [
 			"import * as runner from '@playwright/test';",

@@ -232,6 +232,41 @@ describe("explore server", () => {
     await expect(server.waitForFeedback()).resolves.toBeNull();
   });
 
+  test("returns graceful semantic fallbacks for files without an LSP provider", async () => {
+    const root = environment.makeTempDir();
+    writeFileSync(join(root, "notes.txt"), "Architecture notes\n");
+    const server = await startExploreServer({
+      rootPath: root,
+      htmlContent: SPA_HTML,
+      indexPath: join(environment.makeTempDir(), "atlas.sqlite3"),
+    });
+    try {
+      await waitForReady(server.url);
+      const references = await fetch(
+        `${server.url}/api/atlas/references?symbol=Architecture&path=notes.txt&line=1&column=1`,
+      );
+      expect(references.status).toBe(200);
+      expect(await references.json()).toMatchObject({
+        definitions: [],
+        references: [],
+        provider: { kind: "syntax", status: "unavailable" },
+      });
+
+      const calls = await fetch(
+        `${server.url}/api/atlas/calls?path=notes.txt&line=1&column=1`,
+      );
+      expect(calls.status).toBe(200);
+      expect(await calls.json()).toMatchObject({
+        root: null,
+        callers: [],
+        callees: [],
+        provider: { kind: "lsp", status: "unavailable" },
+      });
+    } finally {
+      await server.stop();
+    }
+  });
+
   test("manual indexing writes a snapshot that a server hydrates after verification", async () => {
     const root = environment.makeTempDir();
     const indexPath = join(environment.makeTempDir(), "atlas.sqlite3");
@@ -293,6 +328,19 @@ describe("explore server", () => {
       rootPath: root,
       htmlContent: SPA_HTML,
       indexPath: join(environment.makeTempDir(), "atlas.sqlite3"),
+    });
+
+    const oversized = await fetch(`${server.url}/api/atlas/feedback`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({
+        annotations: Array.from({ length: 501 }, () => ({})),
+        markdown: "Too many",
+      }),
+    });
+    expect(oversized.status).toBe(400);
+    expect(await oversized.json()).toEqual({
+      error: "Annotations must contain at most 500 items",
     });
 
     const invalid = await fetch(`${server.url}/api/atlas/feedback`, {

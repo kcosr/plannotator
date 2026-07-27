@@ -6,8 +6,10 @@ import { join } from "node:path";
 import type { AtlasSnapshot } from "./atlas";
 import {
 	AtlasSemanticIndexService,
+	AtlasSemanticRepositoryChangedError,
 	type AtlasSemanticIndexProgress,
 } from "./atlas-semantic-index";
+import { collectAtlasRepositoryFingerprint } from "./atlas-repository-fingerprint";
 import type {
 	AtlasSemanticCallHierarchy,
 	AtlasSemanticCapability,
@@ -24,7 +26,12 @@ afterEach(() => {
 	}
 });
 
-function fixture(): { rootPath: string; indexPath: string; snapshot: AtlasSnapshot } {
+function fixture(): {
+	rootPath: string;
+	indexPath: string;
+	snapshot: AtlasSnapshot;
+	verifyRepositoryFingerprint: () => Promise<void>;
+} {
 	const rootPath = mkdtempSync(join(tmpdir(), "atlas-semantic-index-"));
 	directories.push(rootPath);
 	mkdirSync(join(rootPath, "src"));
@@ -123,6 +130,7 @@ function fixture(): { rootPath: string; indexPath: string; snapshot: AtlasSnapsh
 		rootPath,
 		indexPath: join(rootPath, ".plannotator", "atlas.sqlite3"),
 		snapshot,
+		verifyRepositoryFingerprint: async () => {},
 	};
 }
 
@@ -169,10 +177,29 @@ function capabilities(
 	])) as Record<AtlasSemanticLanguage, AtlasSemanticCapability>;
 }
 
+function addIndexedTypeScriptFile(
+	data: ReturnType<typeof fixture>,
+	filePath: string,
+	content: string,
+): void {
+	const source = data.snapshot.nodes[0]!;
+	writeFileSync(join(data.rootPath, ...filePath.split("/")), content);
+	data.snapshot.nodes.push({
+		...source,
+		id: `file:${filePath}`,
+		path: filePath,
+		name: filePath.split("/").at(-1)!,
+		bytes: Buffer.byteLength(content),
+		lines: content.split(/\r?\n/).length,
+		symbols: [],
+	});
+}
+
 class FakeSession {
 	locationCalls = 0;
 	callHierarchyCalls = 0;
 	locationError: Error | null = null;
+	onFindLocations: (() => void | Promise<void>) | null = null;
 	locations: AtlasSemanticLocations = {
 		definitions: [{
 			filePath: "src/main.ts",
@@ -215,6 +242,7 @@ class FakeSession {
 
 	async findLocations(): Promise<AtlasSemanticLocations> {
 		this.locationCalls += 1;
+		await this.onFindLocations?.();
 		if (this.locationError) throw this.locationError;
 		return this.locations;
 	}
@@ -266,9 +294,68 @@ describe("AtlasSemanticIndexService", () => {
 		await second.dispose();
 	});
 
+	test("rejects cached results after another repository file changes", async () => {
+		const data = fixture();
+		writeFileSync(join(data.rootPath, "src", "dependency.ts"), "export const value = 1;\n");
+		const initialFingerprint = (
+			await collectAtlasRepositoryFingerprint(data.rootPath, {
+				excludedPaths: [data.indexPath],
+			})
+		).fingerprint;
+		const session = new FakeSession();
+		const service = await AtlasSemanticIndexService.open({
+			rootPath: data.rootPath,
+			indexPath: data.indexPath,
+			session: asSession(session),
+			capabilities: capabilities(),
+		});
+		const input = {
+			snapshot: data.snapshot,
+			repositoryFingerprint: initialFingerprint,
+			symbol: "run",
+			filePath: "src/main.ts",
+			line: 1,
+			column: 17,
+		};
+
+		expect((await service.resolveReferences(input)).source).toBe("live");
+		writeFileSync(join(data.rootPath, "src", "dependency.ts"), "export const value = 2;\n");
+		await expect(service.resolveReferences(input)).rejects.toThrow(
+			"Repository changed during semantic lookup",
+		);
+
+		const changedFingerprint = (
+			await collectAtlasRepositoryFingerprint(data.rootPath, {
+				excludedPaths: [data.indexPath],
+			})
+		).fingerprint;
+		expect((await service.resolveReferences({
+			...input,
+			repositoryFingerprint: changedFingerprint,
+		})).source).toBe("live");
+		expect(session.locationCalls).toBe(2);
+		await service.dispose();
+	});
+
 	test("reuses declaration reference results from indexed use-site coordinates", async () => {
 		const data = fixture();
+		addIndexedTypeScriptFile(
+			data,
+			"src/dependency.ts",
+			"export function caller() {\n  return run();\n}\n",
+		);
 		const session = new FakeSession();
+		session.locations = {
+			...session.locations,
+			references: [{
+				filePath: "src/dependency.ts",
+				range: {
+					start: { line: 2, column: 10 },
+					end: { line: 2, column: 13 },
+				},
+				external: false,
+			}],
+		};
 		const service = await AtlasSemanticIndexService.open({
 			...data,
 			session: asSession(session),
@@ -287,7 +374,7 @@ describe("AtlasSemanticIndexService", () => {
 		})).source).toBe("live");
 		expect((await service.resolveReferences({
 			...generation,
-			filePath: "src/main.ts",
+			filePath: "src/dependency.ts",
 			line: 2,
 			column: 10,
 		})).source).toBe("cache");
@@ -297,6 +384,11 @@ describe("AtlasSemanticIndexService", () => {
 
 	test("reuses indexed call hierarchy from a returned call-site coordinate", async () => {
 		const data = fixture();
+		addIndexedTypeScriptFile(
+			data,
+			"src/dependency.ts",
+			"export function caller() {\n  return run();\n}\n",
+		);
 		const session = new FakeSession();
 		session.hierarchy = {
 			...session.hierarchy,
@@ -305,7 +397,7 @@ describe("AtlasSemanticIndexService", () => {
 					name: "caller",
 					kind: 12,
 					location: {
-						filePath: "src/main.ts",
+						filePath: "src/dependency.ts",
 						range: {
 							start: { line: 1, column: 1 },
 							end: { line: 3, column: 2 },
@@ -340,13 +432,13 @@ describe("AtlasSemanticIndexService", () => {
 		});
 		expect(live.source).toBe("live");
 		expect(live.response.callers[0]?.callSites).toEqual([expect.objectContaining({
-			filePath: "src/main.ts",
+			filePath: "src/dependency.ts",
 			line: 2,
 			column: 10,
 		})]);
 		expect((await service.resolveCalls({
 			...generation,
-			filePath: "src/main.ts",
+			filePath: "src/dependency.ts",
 			line: 2,
 			column: 10,
 		})).source).toBe("cache");
@@ -429,6 +521,44 @@ describe("AtlasSemanticIndexService", () => {
 			column: 17,
 		};
 		expect((await service.resolveReferences(input)).cacheability).toBe("transient");
+		expect((await service.resolveReferences(input)).source).toBe("live");
+		expect(session.locationCalls).toBe(2);
+		await service.dispose();
+	});
+
+	test("does not serve or persist results when source changes during lookup", async () => {
+		const data = fixture();
+		const session = new FakeSession();
+		session.onFindLocations = () => {
+			writeFileSync(
+				join(data.rootPath, "src", "main.ts"),
+				[
+					"export function run() {",
+					"  return changed();",
+					"}",
+					"export const value = 2;",
+					"",
+				].join("\n"),
+			);
+			session.onFindLocations = null;
+		};
+		const service = await AtlasSemanticIndexService.open({
+			...data,
+			session: asSession(session),
+			capabilities: capabilities(),
+		});
+		const input = {
+			snapshot: data.snapshot,
+			repositoryFingerprint: "sha256:changing-source",
+			symbol: "run",
+			filePath: "src/main.ts",
+			line: 1,
+			column: 17,
+		};
+
+		await expect(service.resolveReferences(input)).rejects.toThrow(
+			"Atlas source changed during semantic lookup",
+		);
 		expect((await service.resolveReferences(input)).source).toBe("live");
 		expect(session.locationCalls).toBe(2);
 		await service.dispose();
@@ -545,6 +675,57 @@ describe("AtlasSemanticIndexService", () => {
 		expect(secondSession.callHierarchyCalls).toBe(0);
 		expect(progressEvents.at(-1)?.current).toBeUndefined();
 		await second.dispose();
+	});
+
+	test("verifies the repository only before and after an indexAll sweep", async () => {
+		const data = fixture();
+		const session = new FakeSession();
+		let verificationCalls = 0;
+		const service = await AtlasSemanticIndexService.open({
+			...data,
+			verifyRepositoryFingerprint: async () => {
+				verificationCalls += 1;
+			},
+			session: asSession(session),
+			capabilities: capabilities(),
+		});
+
+		await service.indexAll({
+			snapshot: data.snapshot,
+			repositoryFingerprint: "sha256:sweep",
+		});
+		expect(verificationCalls).toBe(2);
+		await service.dispose();
+	});
+
+	test("removes a semantic generation when the repository changes during indexAll", async () => {
+		const data = fixture();
+		const session = new FakeSession();
+		let verificationCalls = 0;
+		const service = await AtlasSemanticIndexService.open({
+			...data,
+			verifyRepositoryFingerprint: async () => {
+				verificationCalls += 1;
+				if (verificationCalls === 2) {
+					throw new AtlasSemanticRepositoryChangedError();
+				}
+			},
+			session: asSession(session),
+			capabilities: capabilities(),
+		});
+
+		await expect(service.indexAll({
+			snapshot: data.snapshot,
+			repositoryFingerprint: "sha256:unstable-sweep",
+		})).rejects.toThrow("Repository changed during semantic lookup");
+		await service.dispose();
+
+		const database = new Database(data.indexPath, { readonly: true });
+		const row = database.query(
+			"SELECT COUNT(*) AS count FROM atlas_semantic_queries",
+		).get() as { count: number };
+		expect(row.count).toBe(0);
+		database.close();
 	});
 
 	test("stores repository-relative paths and never stores the absolute root", async () => {

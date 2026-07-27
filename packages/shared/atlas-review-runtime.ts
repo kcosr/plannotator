@@ -75,8 +75,11 @@ interface AtlasReviewRuntime {
 	semanticSession: AtlasSemanticSession;
 }
 
-async function buildReviewAtlasSnapshot(rootPath: string): Promise<AtlasSnapshot> {
-	const capabilities = await probeAtlasSemanticCapabilities();
+async function buildReviewAtlasSnapshot(
+	rootPath: string,
+	signal?: AbortSignal,
+): Promise<AtlasSnapshot> {
+	const capabilities = await probeAtlasSemanticCapabilities({ signal });
 	const semanticProviders: AtlasSemanticProviderCapability[] =
 		Object.values(capabilities).map((capability) => ({
 			language: capability.language,
@@ -88,7 +91,7 @@ async function buildReviewAtlasSnapshot(rootPath: string): Promise<AtlasSnapshot
 			}),
 			...(capability.reason && { reason: capability.reason }),
 		}));
-	return buildAtlasSnapshot(rootPath, { semanticProviders });
+	return buildAtlasSnapshot(rootPath, { semanticProviders, signal });
 }
 
 function unavailableStatus(
@@ -259,8 +262,8 @@ export class AtlasReviewRuntimeManager {
 			const semanticSession = new AtlasSemanticSession();
 			const indexSession = await AtlasIndexSession.open({
 				rootPath,
-				buildSnapshot: ({ rootPath: repositoryRoot }) =>
-					buildReviewAtlasSnapshot(repositoryRoot),
+				buildSnapshot: ({ rootPath: repositoryRoot, signal }) =>
+					buildReviewAtlasSnapshot(repositoryRoot, signal),
 			});
 			const semanticIndex = AtlasSemanticIndexService.open({
 				rootPath,

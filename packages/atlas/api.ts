@@ -16,19 +16,52 @@ export interface AtlasIndexStatus {
   persistent: boolean;
   persistenceError?: string;
   error?: string;
+  capability?: AtlasCapability;
+}
+
+export interface AtlasCapability {
+  available: boolean;
+  code?: string;
+  message?: string;
+  retryable?: boolean;
+}
+
+interface AtlasErrorResponse {
+  error?: string;
+  capability?: AtlasCapability;
+}
+
+export class AtlasRequestError extends Error {
+  readonly status: number;
+  readonly capability?: AtlasCapability;
+  readonly retryable: boolean;
+
+  constructor(
+    message: string,
+    status: number,
+    capability?: AtlasCapability,
+  ) {
+    super(message);
+    this.name = 'AtlasRequestError';
+    this.status = status;
+    this.capability = capability;
+    this.retryable = capability?.retryable ?? status >= 500;
+  }
 }
 
 async function request<T>(url: string, init?: RequestInit): Promise<T> {
   const response = await fetch(url, { cache: 'no-store', ...init });
   if (!response.ok) {
     let message = `${response.status} ${response.statusText}`;
+    let capability: AtlasCapability | undefined;
     try {
-      const body = await response.json() as { error?: string };
-      if (body.error) message = body.error;
+      const body = await response.json() as AtlasErrorResponse;
+      capability = body.capability;
+      message = capability?.message || body.error || message;
     } catch {
       // Preserve the HTTP error when the response is not JSON.
     }
-    throw new Error(message);
+    throw new AtlasRequestError(message, response.status, capability);
   }
   return response.json() as Promise<T>;
 }

@@ -310,13 +310,28 @@ if (isInteractiveNoArgInvocation(args, process.stdin.isTTY)) {
 // Ensure session cleanup on exit
 process.on("exit", () => unregisterSession());
 
-// Route fatal signals through process.exit() so "exit" handlers run — by
-// default a SIGINT/SIGTERM death skips them, leaking background-warmup
-// children and stale `git worktree` registrations (the --local PR checkout
-// cleanup below is registered on "exit"). `once` keeps a second Ctrl-C as a
-// force-quit escape hatch if cleanup ever hangs.
-process.once("SIGINT", () => process.exit(130));
-process.once("SIGTERM", () => process.exit(143));
+let stopActiveServer: (() => Promise<void>) | undefined;
+let signalShutdownStarted = false;
+
+async function shutdownForSignal(exitCode: number): Promise<void> {
+  if (signalShutdownStarted) return;
+  signalShutdownStarted = true;
+  try {
+    await stopActiveServer?.();
+  } catch (error) {
+    console.error(
+      `Could not stop Plannotator cleanly: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+  } finally {
+    process.exit(exitCode);
+  }
+}
+
+// Keep a second signal as the platform's force-quit escape hatch.
+process.once("SIGINT", () => void shutdownForSignal(130));
+process.once("SIGTERM", () => void shutdownForSignal(143));
 
 // Check if URL sharing is enabled (default: true)
 const sharingEnabled = resolveSharingEnabled(loadConfig());
@@ -574,16 +589,25 @@ if (args[0] === "sessions") {
   }
 
   const project = path.basename(rootPath) || rootPath;
-  const server = await startExploreServer({
-    rootPath,
-    htmlContent: exploreHtmlContent,
-    ...(exploreArgs.indexPath && { indexPath: exploreArgs.indexPath }),
-    onReady: (url, isRemote, port) => {
-      return handleExploreServerReady(url, isRemote, port);
-    },
-  });
-  const stopOnExit = () => server.stop();
-  process.once("exit", stopOnExit);
+  let server: Awaited<ReturnType<typeof startExploreServer>>;
+  try {
+    server = await startExploreServer({
+      rootPath,
+      htmlContent: exploreHtmlContent,
+      ...(exploreArgs.indexPath && { indexPath: exploreArgs.indexPath }),
+      onReady: (url, isRemote, port) => {
+        return handleExploreServerReady(url, isRemote, port);
+      },
+    });
+  } catch (error) {
+    console.error(
+      `Could not start codebase explorer: ${
+        error instanceof Error ? error.message : String(error)
+      }`,
+    );
+    process.exit(1);
+  }
+  stopActiveServer = () => server.stop();
 
   registerSession({
     pid: process.pid,
@@ -601,8 +625,8 @@ if (args[0] === "sessions") {
     process.stdout.write(`${feedback.markdown}\n`);
   }
   await Bun.sleep(250);
-  process.removeListener("exit", stopOnExit);
   await server.stop();
+  stopActiveServer = undefined;
   process.exit(0);
 
 } else if (args[0] === "setup-goal") {

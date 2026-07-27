@@ -48,6 +48,8 @@ export interface AtlasRepositoryFingerprintOptions {
 	maxFiles?: number;
 	maxFileBytes?: number;
 	maxTotalBytes?: number;
+	excludedPaths?: string[];
+	signal?: AbortSignal;
 }
 
 export interface AtlasRepositoryFingerprint {
@@ -76,7 +78,9 @@ function isRepositoryCandidate(filePath: string): boolean {
 async function gitRepositoryCandidates(
 	rootPath: string,
 	limit: number,
+	signal?: AbortSignal,
 ): Promise<string[] | null> {
+	signal?.throwIfAborted();
 	try {
 		const { stdout } = await execFileAsync(
 			"git",
@@ -93,8 +97,10 @@ async function gitRepositoryCandidates(
 				encoding: "buffer",
 				maxBuffer: MAX_GIT_OUTPUT_BYTES,
 				timeout: 15_000,
+				signal,
 			},
 		);
+		signal?.throwIfAborted();
 		return stdout
 			.toString("utf8")
 			.split("\0")
@@ -104,6 +110,7 @@ async function gitRepositoryCandidates(
 			.slice(0, limit)
 			.sort();
 	} catch {
+		signal?.throwIfAborted();
 		return null;
 	}
 }
@@ -111,19 +118,23 @@ async function gitRepositoryCandidates(
 async function filesystemRepositoryCandidates(
 	rootPath: string,
 	limit: number,
+	signal?: AbortSignal,
 ): Promise<string[]> {
 	const results: string[] = [];
 	const pending = [rootPath];
 	while (pending.length > 0 && results.length < limit) {
+		signal?.throwIfAborted();
 		const directory = pending.pop()!;
 		let entries;
 		try {
 			entries = await readdir(directory, { withFileTypes: true });
 		} catch {
+			signal?.throwIfAborted();
 			continue;
 		}
 		entries.sort((first, second) => first.name.localeCompare(second.name));
 		for (let index = entries.length - 1; index >= 0; index -= 1) {
+			signal?.throwIfAborted();
 			const entry = entries[index]!;
 			if (entry.isSymbolicLink()) continue;
 			const absolutePath = join(directory, entry.name);
@@ -142,9 +153,12 @@ async function filesystemRepositoryCandidates(
 	return results.sort();
 }
 
-async function fileFingerprint(absolutePath: string): Promise<string> {
+async function fileFingerprint(
+	absolutePath: string,
+	signal?: AbortSignal,
+): Promise<string> {
 	const hash = createHash("sha256");
-	for await (const chunk of createReadStream(absolutePath)) {
+	for await (const chunk of createReadStream(absolutePath, { signal })) {
 		hash.update(chunk as Buffer);
 	}
 	return hash.digest("hex");
@@ -160,12 +174,41 @@ export async function collectAtlasRepositoryFingerprint(
 	rootPath: string,
 	options: AtlasRepositoryFingerprintOptions = {},
 ): Promise<AtlasRepositoryFingerprint> {
+	options.signal?.throwIfAborted();
 	const canonicalRoot = await realpath(resolve(rootPath));
 	const maxFiles = positiveInteger(options.maxFiles, DEFAULT_MAX_FILES);
 	const maxFileBytes = positiveInteger(options.maxFileBytes, DEFAULT_MAX_FILE_BYTES);
 	const maxTotalBytes = positiveInteger(options.maxTotalBytes, DEFAULT_MAX_TOTAL_BYTES);
-	const discovered = await gitRepositoryCandidates(canonicalRoot, maxFiles + 1) ??
-		await filesystemRepositoryCandidates(canonicalRoot, maxFiles + 1);
+	const excludedPaths = new Set(
+		(options.excludedPaths ?? []).flatMap((filePath) => {
+			const repositoryPath = normalizeRepositoryPath(
+				relative(canonicalRoot, resolve(canonicalRoot, filePath)),
+			);
+			if (
+				!repositoryPath ||
+				repositoryPath === ".." ||
+				repositoryPath.startsWith("../")
+			) return [];
+			return [
+				repositoryPath,
+				`${repositoryPath}-journal`,
+				`${repositoryPath}-shm`,
+				`${repositoryPath}-wal`,
+			];
+		}),
+	);
+	const candidateLimit = maxFiles + excludedPaths.size + 1;
+	const discovered = (await gitRepositoryCandidates(
+		canonicalRoot,
+		candidateLimit,
+		options.signal,
+	) ??
+		await filesystemRepositoryCandidates(
+			canonicalRoot,
+			candidateLimit,
+			options.signal,
+		))
+		.filter((repositoryPath) => !excludedPaths.has(repositoryPath));
 	const candidates = discovered.slice(0, maxFiles);
 	const fingerprintEntries: Array<{ path: string; contentFingerprint: string }> = [{
 		path: "\0atlas-fingerprint-options",
@@ -176,11 +219,13 @@ export async function collectAtlasRepositoryFingerprint(
 	let truncated = discovered.length > maxFiles;
 
 	for (const repositoryPath of candidates) {
+		options.signal?.throwIfAborted();
 		const absolutePath = join(canonicalRoot, ...repositoryPath.split("/"));
 		let fileStats;
 		try {
 			fileStats = await lstat(absolutePath);
 		} catch {
+			options.signal?.throwIfAborted();
 			continue;
 		}
 		if (
@@ -190,8 +235,9 @@ export async function collectAtlasRepositoryFingerprint(
 
 		let contentFingerprint: string;
 		try {
-			contentFingerprint = await fileFingerprint(absolutePath);
+			contentFingerprint = await fileFingerprint(absolutePath, options.signal);
 		} catch {
+			options.signal?.throwIfAborted();
 			continue;
 		}
 		if (

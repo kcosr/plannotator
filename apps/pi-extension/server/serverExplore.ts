@@ -4,7 +4,10 @@ import { isAbsolute, relative, resolve, sep } from "node:path";
 
 import {
 	buildAtlasSnapshot,
+	findAtlasDeclarations,
 	readAtlasSource,
+	type AtlasCallHierarchyResponse,
+	type AtlasReferenceResponse,
 	type AtlasSemanticProviderCapability,
 	type AtlasSnapshot,
 } from "../generated/atlas.ts";
@@ -31,6 +34,7 @@ import { isRemoteSession, listenOnPort } from "./network.ts";
 import type { CodeAnnotation } from "../generated/code-annotation.ts";
 
 export type AtlasIndexStatus = AtlasIndexSessionStatus["status"];
+const MAX_ATLAS_FEEDBACK_ANNOTATIONS = 500;
 
 export interface ExploreServerResult {
 	port: number;
@@ -47,8 +51,11 @@ export interface AtlasFeedbackResult {
 	markdown: string;
 }
 
-async function buildIndexedAtlasSnapshot(rootPath: string): Promise<AtlasSnapshot> {
-	const capabilities = await probeAtlasSemanticCapabilities();
+async function buildIndexedAtlasSnapshot(
+	rootPath: string,
+	signal?: AbortSignal,
+): Promise<AtlasSnapshot> {
+	const capabilities = await probeAtlasSemanticCapabilities({ signal });
 	const semanticProviders: AtlasSemanticProviderCapability[] = Object.values(capabilities)
 		.map((capability) => ({
 			language: capability.language,
@@ -60,7 +67,7 @@ async function buildIndexedAtlasSnapshot(rootPath: string): Promise<AtlasSnapsho
 			...(capability.version && { version: capability.version }),
 			...(capability.reason && { reason: capability.reason }),
 		}));
-	return buildAtlasSnapshot(rootPath, { semanticProviders });
+	return buildAtlasSnapshot(rootPath, { semanticProviders, signal });
 }
 
 async function warmAtlasSemantics(
@@ -148,9 +155,13 @@ async function parseAtlasFeedback(
 	if (!Array.isArray(annotations) || typeof markdown !== "string") {
 		return "Annotations must be an array and markdown must be a string";
 	}
+	if (annotations.length > MAX_ATLAS_FEEDBACK_ANNOTATIONS) {
+		return `Annotations must contain at most ${MAX_ATLAS_FEEDBACK_ANNOTATIONS} items`;
+	}
 
 	const parsed: CodeAnnotation[] = [];
 	const ids = new Set<string>();
+	const lineCounts = new Map<string, number>();
 	for (const value of annotations) {
 		if (
 			!value
@@ -209,8 +220,12 @@ async function parseAtlasFeedback(
 		if (!sourcePath || sourcePath !== filePath.replace(/\\/g, "/")) {
 			return `Annotation path is outside the repository or invalid: ${filePath}`;
 		}
-		const sourceFile = await readAtlasSource(rootPath, sourcePath);
-		const lineCount = sourceFile.content.split(/\r?\n/).length;
+		let lineCount = lineCounts.get(sourcePath);
+		if (lineCount === undefined) {
+			const sourceFile = await readAtlasSource(rootPath, sourcePath);
+			lineCount = sourceFile.content.split(/\r?\n/).length;
+			lineCounts.set(sourcePath, lineCount);
+		}
 		if ((lineEnd as number) > lineCount) {
 			return `Annotation line range is outside the source file: ${filePath}`;
 		}
@@ -235,6 +250,56 @@ async function parseAtlasFeedback(
 	return { annotations: parsed, markdown };
 }
 
+function semanticFailureMessage(error: unknown): string {
+	return (error instanceof Error ? error.message : String(error)).replace(/[.\s]+$/, "");
+}
+
+async function referenceFallback(
+	rootPath: string,
+	snapshot: AtlasSnapshot,
+	symbol: string,
+	filePath: string,
+	error: unknown,
+): Promise<AtlasReferenceResponse> {
+	return {
+		definitions: await findAtlasDeclarations(rootPath, snapshot, symbol, filePath),
+		references: [],
+		provider: {
+			kind: "syntax",
+			name: snapshot.analyzers.structural.name,
+			status: "unavailable",
+			message:
+				`Semantic navigation is unavailable: ${semanticFailureMessage(error)}. ` +
+				"Showing indexed declarations only.",
+		},
+	};
+}
+
+function callFallback(
+	snapshot: AtlasSnapshot,
+	filePath: string,
+	error: unknown,
+): AtlasCallHierarchyResponse {
+	const language = snapshot.nodes.find(
+		(node) => node.kind === "file" && node.path === filePath,
+	)?.language;
+	const provider = snapshot.analyzers.semantic.providers.find(
+		(candidate) => candidate.language === language,
+	);
+	return {
+		root: null,
+		callers: [],
+		callees: [],
+		truncated: false,
+		provider: {
+			kind: "lsp",
+			name: provider?.name ?? language ?? "language server",
+			status: "unavailable",
+			message: `Call hierarchy is unavailable: ${semanticFailureMessage(error)}`,
+		},
+	};
+}
+
 export async function startExploreServer(options: {
 	rootPath: string;
 	htmlContent: string;
@@ -252,8 +317,8 @@ export async function startExploreServer(options: {
 		...(options.indexPath && {
 			cacheOptions: { indexPath: options.indexPath },
 		}),
-		buildSnapshot: ({ rootPath: repositoryRoot }) =>
-			buildIndexedAtlasSnapshot(repositoryRoot),
+		buildSnapshot: ({ rootPath: repositoryRoot, signal }) =>
+			buildIndexedAtlasSnapshot(repositoryRoot, signal),
 	});
 	const semanticIndexPromise = AtlasSemanticIndexService.open({
 		rootPath,
@@ -443,7 +508,15 @@ export async function startExploreServer(options: {
 					});
 					if (!cancellation.signal.aborted) json(res, references.response);
 				} catch (error) {
-					if (!cancellation.signal.aborted) throw error;
+					if (!cancellation.signal.aborted) {
+						json(res, await referenceFallback(
+							rootPath,
+							generation.snapshot,
+							symbol,
+							sourcePath,
+							error,
+						));
+					}
 				} finally {
 					req.off("aborted", abortRequest);
 					res.off("close", abortResponse);
@@ -496,7 +569,18 @@ export async function startExploreServer(options: {
 					});
 					if (!cancellation.signal.aborted) json(res, calls.response);
 				} catch (error) {
-					if (!cancellation.signal.aborted) throw error;
+					if (!cancellation.signal.aborted) {
+						const generation = indexSession.getSnapshotGeneration();
+						if (!generation) {
+							json(res, indexStatus, 202);
+						} else {
+							json(res, callFallback(
+								generation.snapshot,
+								sourcePath,
+								error,
+							));
+						}
+					}
 				} finally {
 					req.off("aborted", abortRequest);
 					res.off("close", abortResponse);

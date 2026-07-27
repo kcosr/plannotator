@@ -67,11 +67,14 @@ const MODIFIERS = new Set([
 	"fails",
 	"failing",
 	"each",
+	"for",
 	"runIf",
 	"skipIf",
 	"fixme",
 	"parallel",
 ]);
+
+const PARAMETERIZED_MODIFIERS = new Set(["each", "for", "runIf", "skipIf"]);
 
 function lineCount(content: string): number {
 	if (content.length === 0) return 0;
@@ -287,20 +290,112 @@ function normalizeRanges(ranges: JavaScriptTestRange[]): JavaScriptTestRange[] {
 	return result;
 }
 
+function maskNonCode(content: string): string {
+	const masked = content.split("");
+	let quote: "'" | '"' | "`" | null = null;
+	let lineComment = false;
+	let blockComment = false;
+	for (let index = 0; index < content.length; index += 1) {
+		const character = content[index]!;
+		const next = content[index + 1];
+		if (lineComment) {
+			if (character === "\n") {
+				lineComment = false;
+			} else {
+				masked[index] = " ";
+			}
+			continue;
+		}
+		if (blockComment) {
+			if (character === "\n") continue;
+			masked[index] = " ";
+			if (character === "*" && next === "/") {
+				masked[index + 1] = " ";
+				blockComment = false;
+				index += 1;
+			}
+			continue;
+		}
+		if (quote) {
+			if (character === "\n") continue;
+			masked[index] = " ";
+			if (character === "\\") {
+				if (next !== "\n") masked[index + 1] = " ";
+				index += 1;
+				continue;
+			}
+			if (character === quote) quote = null;
+			continue;
+		}
+		if (character === "/" && next === "/") {
+			masked[index] = " ";
+			masked[index + 1] = " ";
+			lineComment = true;
+			index += 1;
+			continue;
+		}
+		if (character === "/" && next === "*") {
+			masked[index] = " ";
+			masked[index + 1] = " ";
+			blockComment = true;
+			index += 1;
+			continue;
+		}
+		if (character === "'" || character === '"' || character === "`") {
+			masked[index] = " ";
+			quote = character;
+		}
+	}
+	return masked.join("");
+}
+
+function skipWhitespace(content: string, offset: number): number {
+	let cursor = offset;
+	while (cursor < content.length && /\s/.test(content[cursor]!)) cursor += 1;
+	return cursor;
+}
+
+function matchingCallEnd(content: string, openingOffset: number): number | null {
+	let depth = 0;
+	for (let index = openingOffset; index < content.length; index += 1) {
+		if (content[index] === "(") depth += 1;
+		if (content[index] !== ")") continue;
+		depth -= 1;
+		if (depth === 0) return index;
+	}
+	return null;
+}
+
 function inlineTestRanges(
 	content: string,
 	bindings: Map<string, Binding>,
 ): JavaScriptTestRange[] {
 	const ranges: JavaScriptTestRange[] = [];
-	for (const match of content.matchAll(
-		/^\s*(?:await\s+)?([A-Za-z_$][\w$]*(?:(?:\?\.|\.)[A-Za-z_$][\w$]*)*)\s*(?:\([^{}\n;]*\)\s*)?\(/gm,
+	const masked = maskNonCode(content);
+	for (const match of masked.matchAll(
+		/^[\t ]*(?:await[\t ]+)?([A-Za-z_$][\w$]*(?:(?:\?\.|\.)[A-Za-z_$][\w$]*)*)/gm,
 	)) {
-		if (!semanticCallee(match[1]!, bindings)) continue;
+		const callee = match[1]!;
+		if (!semanticCallee(callee, bindings)) continue;
 		const startOffset = match.index;
-		const openingOffset = startOffset + match[0].lastIndexOf("(");
+		let openingOffset = skipWhitespace(
+			masked,
+			startOffset + match[0].length,
+		);
+		if (masked[openingOffset] !== "(") continue;
+		let closingOffset = matchingCallEnd(masked, openingOffset);
+		if (closingOffset === null) continue;
+
+		const lastPart = calleeParts(callee).at(-1);
+		if (lastPart && PARAMETERIZED_MODIFIERS.has(lastPart)) {
+			openingOffset = skipWhitespace(masked, closingOffset + 1);
+			if (masked[openingOffset] !== "(") continue;
+			closingOffset = matchingCallEnd(masked, openingOffset);
+			if (closingOffset === null) continue;
+		}
 		ranges.push({
 			startLine: lineAtOffset(content, startOffset),
-			endLine: lineAtOffset(content, matchingCallEnd(content, openingOffset)),
+			endLine: lineAtOffset(content, closingOffset),
 			reason: "js-test-call",
 			confidence: "semantic",
 		});
@@ -314,55 +409,6 @@ function lineAtOffset(content: string, offset: number): number {
 		if (content[index] === "\n") line += 1;
 	}
 	return line;
-}
-
-function matchingCallEnd(content: string, openingOffset: number): number {
-	let depth = 0;
-	let quote: "'" | '"' | "`" | null = null;
-	let lineComment = false;
-	let blockComment = false;
-	for (let index = openingOffset; index < content.length; index += 1) {
-		const character = content[index]!;
-		const next = content[index + 1];
-		if (lineComment) {
-			if (character === "\n") lineComment = false;
-			continue;
-		}
-		if (blockComment) {
-			if (character === "*" && next === "/") {
-				blockComment = false;
-				index += 1;
-			}
-			continue;
-		}
-		if (quote) {
-			if (character === "\\") {
-				index += 1;
-				continue;
-			}
-			if (character === quote) quote = null;
-			continue;
-		}
-		if (character === "/" && next === "/") {
-			lineComment = true;
-			index += 1;
-			continue;
-		}
-		if (character === "/" && next === "*") {
-			blockComment = true;
-			index += 1;
-			continue;
-		}
-		if (character === "'" || character === '"' || character === "`") {
-			quote = character;
-			continue;
-		}
-		if (character === "(") depth += 1;
-		if (character !== ")") continue;
-		depth -= 1;
-		if (depth === 0) return index;
-	}
-	return openingOffset;
 }
 
 /**

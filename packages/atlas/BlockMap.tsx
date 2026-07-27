@@ -216,6 +216,12 @@ export function blockMapQueryMatches(
   return matches;
 }
 
+export function blockMapKeyboardActivation(
+  key: string,
+): BlockMapActivation['kind'] | null {
+  return key === 'Enter' ? 'open' : null;
+}
+
 function createBlocks(
   parent: AtlasNode,
   byId: Map<string, AtlasNode>,
@@ -314,7 +320,7 @@ export const BlockMap = memo(function BlockMap({
   const queryMatches = useMemo(() => blockMapQueryMatches(nodes, query), [nodes, query]);
 
   return (
-    <div ref={ref} className="atlas-block-map" role="tree" aria-label={`Contents of ${root.path || root.name}`}>
+    <div ref={ref} className="atlas-block-map" role="region" aria-label={`Contents of ${root.path || root.name}`}>
       {blocks.map(({ node, x, y, width: blockWidth, height: blockHeight, depth, container }) => {
         const compact = blockWidth < 105 || blockHeight < 58;
         const tiny = blockWidth < 52 || blockHeight < 30;
@@ -332,8 +338,8 @@ export const BlockMap = memo(function BlockMap({
         return (
           <button
             type="button"
-            role="treeitem"
-            aria-label={`${node.kind} ${node.path}, ${value} ${sizeMetric}`}
+            aria-label={`${node.kind} ${node.path}, ${value} ${sizeMetric}. Press Space to select and Enter to open.`}
+            aria-pressed={selectedId === node.id}
             key={`${node.id}:${depth}`}
             className={`atlas-block atlas-block--${node.kind} atlas-block--${relationship ?? 'normal'}${overlayRelationship ? ` atlas-block--impact-${overlayRelationship}` : ''}${nodeOverlay ? ' has-change-overlay' : ''}${nodeOverlay?.directChange ? ' is-direct-change' : ''}${container ? ' is-container' : ''}${selectedId === node.id ? ' is-selected' : ''}${dimmed ? ' is-dimmed' : ''}`}
             style={{
@@ -356,6 +362,14 @@ export const BlockMap = memo(function BlockMap({
             onDoubleClick={(event) => {
               event.stopPropagation();
               if (onActivate) onActivate({ kind: 'open', node, overlay: nodeOverlay });
+              else onOpen?.(node);
+            }}
+            onKeyDown={(event) => {
+              const kind = blockMapKeyboardActivation(event.key);
+              if (!kind) return;
+              event.preventDefault();
+              event.stopPropagation();
+              if (onActivate) onActivate({ kind, node, overlay: nodeOverlay });
               else onOpen?.(node);
             }}
             title={`${node.path}\n${formatNumber(lines)} ${codeFilterLabel(codeFilter)} lines · ${formatBytes(filteredMetric(node, codeFilter, 'bytes'))} · complexity ${formatNumber(filteredComplexity(node, codeFilter))}${nodeOverlay?.changes ? `\nChanges: +${formatNumber(finiteNonNegative(nodeOverlay.changes.additions))} −${formatNumber(finiteNonNegative(nodeOverlay.changes.deletions))}${nodeOverlay.changes.changedSymbols !== undefined ? ` · ${formatNumber(finiteNonNegative(nodeOverlay.changes.changedSymbols))} symbols` : ''}` : ''}`}

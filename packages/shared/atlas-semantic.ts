@@ -93,6 +93,7 @@ export interface AtlasSemanticCallHierarchy {
 export interface AtlasSemanticProbeOptions {
 	env?: NodeJS.ProcessEnv;
 	timeoutMs?: number;
+	signal?: AbortSignal;
 }
 
 export interface AtlasSemanticSessionOptions extends AtlasSemanticProbeOptions {
@@ -342,12 +343,14 @@ function runVersionProbe(
 	args: string[],
 	env: NodeJS.ProcessEnv,
 	timeoutMs: number,
+	signal?: AbortSignal,
 ): Promise<{ ok: true; version: string } | { ok: false; reason: string }> {
 	return new Promise((resolvePromise) => {
 		const child = spawn(command, args, {
 			env,
 			stdio: ["ignore", "pipe", "pipe"],
 			windowsHide: true,
+			signal,
 		});
 		const stdout: Buffer[] = [];
 		const stderr: Buffer[] = [];
@@ -402,6 +405,7 @@ export async function probeAtlasSemanticCapability(
 	language: AtlasSemanticLanguage,
 	options: AtlasSemanticProbeOptions = {},
 ): Promise<AtlasSemanticCapability> {
+	options.signal?.throwIfAborted();
 	const definition = definitionForLanguage(language);
 	const env = options.env ?? process.env;
 	const override = env[definition.envVariable]?.trim();
@@ -428,7 +432,9 @@ export async function probeAtlasSemanticCapability(
 		definition.versionArgs,
 		env,
 		positiveTimeout(options.timeoutMs, DEFAULT_PROBE_TIMEOUT_MS),
+		options.signal,
 	);
+	options.signal?.throwIfAborted();
 	if (!result.ok) {
 		return { ...base, command, reason: result.reason };
 	}
