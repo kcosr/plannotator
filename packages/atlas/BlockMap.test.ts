@@ -1,5 +1,6 @@
 import { describe, expect, test } from 'bun:test';
 import {
+  blockMapChangeColor,
   blockMapChangedLines,
   blockMapOverlayMaximum,
   resolveBlockMapNodeOverlay,
@@ -66,5 +67,11 @@ describe('BlockMap overlays', () => {
       deletions: -5,
       changedLines: Number.POSITIVE_INFINITY,
     })).toBe(0);
+  });
+
+  test('uses net change direction for the heat color', () => {
+    expect(blockMapChangeColor({ additions: 8, deletions: 3 })).toBe('#22c55e');
+    expect(blockMapChangeColor({ additions: 2, deletions: 7 })).toBe('#ef4444');
+    expect(blockMapChangeColor({ additions: 5, deletions: 5 })).toBe('#eab308');
   });
 });

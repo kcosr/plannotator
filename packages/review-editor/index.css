@@ -559,11 +559,7 @@
 .review-atlas-spin { animation: review-atlas-spin 800ms linear infinite; }
 @keyframes review-atlas-spin { to { transform: rotate(360deg); } }
 
-@media (max-width: 720px) {
-  .review-surface-switcher button { min-width: 42px; padding: 0 5px; }
-  .review-atlas-host__summary { display: none; }
-  .review-atlas-host__views button,
-  .review-atlas-host__views > span { min-width: 62px; padding: 0 6px; }
+@media (max-width: 1100px) {
   .review-atlas-host__workspace.is-scope {
     grid-template-columns: minmax(0, 1fr);
     grid-template-rows: minmax(260px, 58%) minmax(0, 42%);
@@ -576,6 +572,13 @@
   }
   .review-atlas-hotspots { border-right: 1px solid var(--border); border-bottom: 0; }
   .review-atlas-impact-legend { display: none; }
+}
+
+@media (max-width: 720px) {
+  .review-surface-switcher button { min-width: 42px; padding: 0 5px; }
+  .review-atlas-host__summary { display: none; }
+  .review-atlas-host__views button,
+  .review-atlas-host__views > span { min-width: 62px; padding: 0 6px; }
 }
 
 /* Shared panel header height — keeps file header, sidebar headers, and

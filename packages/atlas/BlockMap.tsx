@@ -144,6 +144,7 @@ interface RenderBlock {
 interface ResolvedBlockMapNodeOverlay extends BlockMapNodeOverlay {
   intensity: number;
   changedLines: number;
+  changeColor: string;
 }
 
 function finiteNonNegative(value: number | undefined): number {
@@ -154,6 +155,14 @@ export function blockMapChangedLines(changes: BlockMapChangeMetrics | undefined)
   if (!changes) return 0;
   if (changes.changedLines !== undefined) return finiteNonNegative(changes.changedLines);
   return finiteNonNegative(changes.additions) + finiteNonNegative(changes.deletions);
+}
+
+export function blockMapChangeColor(changes: BlockMapChangeMetrics | undefined): string {
+  const additions = finiteNonNegative(changes?.additions);
+  const deletions = finiteNonNegative(changes?.deletions);
+  if (additions > deletions) return '#22c55e';
+  if (deletions > additions) return '#ef4444';
+  return '#eab308';
 }
 
 export function blockMapOverlayMaximum(overlay: BlockMapOverlay | undefined): number {
@@ -180,7 +189,12 @@ export function resolveBlockMapNodeOverlay(
     1,
     Math.max(0, Number.isFinite(nodeOverlay.intensity) ? nodeOverlay.intensity! : derivedIntensity),
   );
-  return { ...nodeOverlay, intensity, changedLines };
+  return {
+    ...nodeOverlay,
+    intensity,
+    changedLines,
+    changeColor: blockMapChangeColor(nodeOverlay.changes),
+  };
 }
 
 function createBlocks(
@@ -312,6 +326,7 @@ export const BlockMap = memo(function BlockMap({
               '--block-color': nodeColor(node, codeFilter, colorMetric, maxColorValueByDepth.get(depth) ?? 1),
               ...(nodeOverlay && {
                 '--change-intensity': `${Math.round(nodeOverlay.intensity * 72)}%`,
+                '--change-color': nodeOverlay.changeColor,
               }),
             } as React.CSSProperties}
             onClick={(event) => {
@@ -351,9 +366,9 @@ export const BlockMap = memo(function BlockMap({
         {overlay ? (
           <>
             <strong>Diff heat</strong>
-            <span>Low</span>
+            <span>Net −</span>
             <i className="atlas-color-scale" />
-            <span>High</span>
+            <span>Net +</span>
           </>
         ) : colorMetric === 'language' ? (
           visibleLanguages.map((language) => (

@@ -496,7 +496,13 @@ export function AtlasWorkspace({
   }
 
   return (
-    <div className={`atlas-shell${showRepositorySidebar && sidebarOpen ? '' : ' is-sidebar-closed'}`}>
+    <div
+      className={`atlas-shell${
+        showRepositorySidebar
+          ? sidebarOpen ? '' : ' is-sidebar-closed'
+          : ' is-repository-sidebar-disabled'
+      }`}
+    >
       {showRepositorySidebar && (
         <aside className="atlas-sidebar">
           <div className="atlas-sidebar-header">

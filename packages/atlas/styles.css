@@ -111,6 +111,7 @@
   grid-template-columns: 240px minmax(0, 1fr);
 }
 .atlas-shell.is-sidebar-closed { grid-template-columns: 0 minmax(0, 1fr); }
+.atlas-shell.is-repository-sidebar-disabled { grid-template-columns: minmax(0, 1fr); }
 .atlas-sidebar {
   min-height: 0; min-width: 0; overflow: hidden; display: grid;
   grid-template-rows: 34px minmax(0, 1fr) auto;
@@ -261,25 +262,25 @@
 .atlas-block.has-change-overlay {
   background: color-mix(
     in oklab,
-    #ef4444 var(--change-intensity),
+    var(--change-color) var(--change-intensity),
     color-mix(in oklab, var(--block-color) 48%, var(--background))
   );
 }
 .light .atlas-block.has-change-overlay {
   background: color-mix(
     in oklab,
-    #dc2626 var(--change-intensity),
+    var(--change-color) var(--change-intensity),
     color-mix(in oklab, var(--block-color) 38%, var(--background))
   );
 }
 .atlas-block.has-change-overlay.is-container {
   background: color-mix(
     in oklab,
-    #ef4444 var(--change-intensity),
+    var(--change-color) var(--change-intensity),
     color-mix(in oklab, var(--block-color) 26%, var(--background))
   );
 }
-.atlas-block.is-direct-change { border-color: color-mix(in oklab, #fca5a5 82%, var(--border)); }
+.atlas-block.is-direct-change { border-color: color-mix(in oklab, var(--change-color) 82%, var(--border)); }
 .atlas-block--impact-direct { outline: 3px solid #f8fafc; outline-offset: -4px; }
 .atlas-block--impact-impacted { outline: 2px solid #c084fc; outline-offset: -3px; }
 .atlas-block--impact-caller { outline: 2px solid #22c55e; outline-offset: -3px; }
@@ -317,7 +318,7 @@
 .atlas-color-scale { width: 72px; height: 6px; border-radius: 2px; }
 .atlas-color-legend--complexity .atlas-color-scale { background: linear-gradient(90deg, #2563eb, #eab308, #ef4444); }
 .atlas-color-legend--size .atlas-color-scale { background: linear-gradient(90deg, #14b8a6, #a855f7); }
-.atlas-color-legend--changes .atlas-color-scale { background: linear-gradient(90deg, #7f1d1d, #ef4444, #fca5a5); }
+.atlas-color-legend--changes .atlas-color-scale { background: linear-gradient(90deg, #ef4444, #eab308, #22c55e); }
 .atlas-overview-layout.is-relationships .atlas-color-legend { top: 10px; bottom: auto; }
 .atlas-relationship-legend {
   position: absolute; left: 10px; bottom: 10px; display: flex; gap: 11px;
