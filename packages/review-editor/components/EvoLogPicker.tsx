@@ -48,7 +48,7 @@ export const EvoLogPicker: React.FC<EvoLogPickerProps> = ({
           <button
             type="button"
             disabled={disabled}
-            title={`Compare against evolog entry: ${selectedCommitId}`}
+            title={`Compare against evolog entry: ${selectedCommitId} · [ previous, ] next`}
             className={`w-full flex items-center gap-1.5 px-2.5 py-1.5 rounded text-xs font-medium overflow-hidden transition-colors focus:outline-none focus:ring-1 focus:ring-primary/50 disabled:opacity-50 disabled:cursor-not-allowed ${
               isCustom
                 ? 'bg-primary/10 border border-primary/30 text-foreground'

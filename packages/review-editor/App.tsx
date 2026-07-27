@@ -106,6 +106,7 @@ import { DEMO_TOUR_ID } from './demoTour';
 import { GuideScreen } from './components/guide/GuideScreen';
 import { DEMO_GUIDE_ID } from './demoGuide';
 import { buildPRArtifacts } from './utils/prArtifacts';
+import { stepGitReviewBase, stepJjEvolutionBase } from './utils/baseNavigation';
 import { ReviewAtlasSurface } from './components/ReviewAtlasSurface';
 import type { ReviewAtlasFocusTarget, ReviewAtlasMode } from './components/ReviewAtlasSurface';
 import type { AtlasSourceAnnotationDraft, AtlasWorkspaceSourceTarget } from '@plannotator/atlas';
@@ -1990,6 +1991,54 @@ const ReviewApp: React.FC = () => {
     },
     [selectedBase, activeDiffBase, diffType, fetchDiffSwitch],
   );
+
+  useEffect(() => {
+    const handleBaseStep = (event: KeyboardEvent) => {
+      if (
+        (event.key !== '[' && event.key !== ']')
+        || event.metaKey
+        || event.ctrlKey
+        || event.altKey
+        || isTypingTarget(event.target)
+        || reviewSurface === 'codebase'
+        || isLoadingDiff
+        || prMetadata
+        || !selectedBase
+      ) return;
+
+      const direction = event.key === '[' ? -1 : 1;
+      const nextBase = activeDiffBase === 'jj-evolog'
+        ? stepJjEvolutionBase(
+            selectedBase,
+            direction,
+            gitContext?.jjEvologs ?? [],
+          )
+        : gitContext?.availableBranches
+          && gitContext.compareTarget?.diffTypes.includes(activeDiffBase)
+          ? stepGitReviewBase(
+              selectedBase,
+              direction,
+              gitContext.availableBranches,
+              gitContext.recentCommits ?? [],
+            )
+          : null;
+      if (!nextBase) return;
+
+      event.preventDefault();
+      void handleBaseSelect(nextBase);
+    };
+
+    window.addEventListener('keydown', handleBaseStep);
+    return () => window.removeEventListener('keydown', handleBaseStep);
+  }, [
+    activeDiffBase,
+    gitContext,
+    handleBaseSelect,
+    isLoadingDiff,
+    prMetadata,
+    reviewSurface,
+    selectedBase,
+  ]);
 
   // Switch diff type (uncommitted, last-commit, branch) — composes worktree prefix if active
   const handleDiffSwitch = useCallback(async (baseDiffType: string) => {

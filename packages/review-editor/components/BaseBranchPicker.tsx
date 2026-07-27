@@ -157,7 +157,7 @@ export const BaseBranchPicker: React.FC<BaseBranchPickerProps> = ({
           <button
             type="button"
             disabled={disabled}
-            title={`${copy.triggerTitlePrefix}: ${selectedBase}`}
+            title={`${copy.triggerTitlePrefix}: ${selectedBase} · [ previous, ] next`}
             className={`w-full flex items-center gap-1.5 px-2.5 py-1.5 rounded text-xs font-medium transition-colors focus:outline-none focus:ring-1 focus:ring-primary/50 disabled:opacity-50 disabled:cursor-not-allowed ${
               isCustom
                 ? 'bg-primary/10 border border-primary/30 text-foreground'
