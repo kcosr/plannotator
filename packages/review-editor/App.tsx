@@ -286,6 +286,7 @@ const ReviewApp: React.FC = () => {
   // Unknown until /api/diff responds. Keeping this tri-state prevents provider
   // discovery from starting before the server reports that AI is enabled.
   const [aiEnabled, setAiEnabled] = useState<boolean | null>(null);
+  const [atlasEnabled, setAtlasEnabled] = useState(false);
   const aiUIEnabled = aiEnabled === true;
   const guideVisible = reviewSurface === 'diff' && aiUIEnabled && guideOpen;
   const [gitUser, setGitUser] = useState<string | undefined>();
@@ -1342,6 +1343,7 @@ const ReviewApp: React.FC = () => {
       .then((data: {
         rawPatch: string;
         gitRef: string;
+        atlasEnabled: boolean;
         aiEnabled?: boolean;
         aiReviewContext?: string;
         origin?: Origin;
@@ -1377,6 +1379,7 @@ const ReviewApp: React.FC = () => {
         setGitUser(data.serverConfig?.gitUser);
         setSnapshotId(data.snapshotId);
         setAiEnabled(data.aiEnabled !== false);
+        setAtlasEnabled(data.atlasEnabled);
         const apiFiles = orderFilesBySections(parseDiffToFiles(data.rawPatch), data.sections);
         setDiffData({
           files: apiFiles,
@@ -1455,6 +1458,7 @@ const ReviewApp: React.FC = () => {
       .catch(() => {
         // Not in API mode - use demo content
         setAiEnabled(true);
+        setAtlasEnabled(false);
         const demoFiles = parseDiffToFiles(DEMO_DIFF);
         setDiffData({
           files: demoFiles,
@@ -2950,27 +2954,29 @@ const ReviewApp: React.FC = () => {
                 <div className="w-px h-5 bg-border/50 mx-1 hidden lg:block" />
               </>
             )}
-            <div className="review-surface-switcher" role="tablist" aria-label="Review surface">
-              {([
-                ['diff', 'Diff'],
-                ['scope', 'Scope'],
-                ['codebase', 'Codebase'],
-              ] as const).map(([id, label]) => (
-                <button
-                  type="button"
-                  role="tab"
-                  key={id}
-                  aria-selected={reviewSurface === id}
-                  className={reviewSurface === id ? 'is-active' : ''}
-                  onClick={() => {
-                    setReviewSurface(id);
-                    if (id !== 'diff') setGuideOpen(false);
-                  }}
-                >
-                  {label}
-                </button>
-              ))}
-            </div>
+            {atlasEnabled && (
+              <div className="review-surface-switcher" role="tablist" aria-label="Review surface">
+                {([
+                  ['diff', 'Diff'],
+                  ['scope', 'Scope'],
+                  ['codebase', 'Codebase'],
+                ] as const).map(([id, label]) => (
+                  <button
+                    type="button"
+                    role="tab"
+                    key={id}
+                    aria-selected={reviewSurface === id}
+                    className={reviewSurface === id ? 'is-active' : ''}
+                    onClick={() => {
+                      setReviewSurface(id);
+                      if (id !== 'diff') setGuideOpen(false);
+                    }}
+                  >
+                    {label}
+                  </button>
+                ))}
+              </div>
+            )}
             <div className="w-px h-5 bg-border/50 mx-1 hidden lg:block" />
             {prMetadata ? (
               <div className="min-w-0 flex flex-1 items-center gap-2 lg:gap-3 overflow-hidden">
@@ -3561,29 +3567,31 @@ const ReviewApp: React.FC = () => {
             </div>
           )}
 
-          <div className={`h-full min-h-0 flex-1 min-w-0 overflow-hidden ${guideVisible || reviewSurface === 'diff' ? 'hidden' : ''}`}>
-            <ReviewAtlasSurface
-              mode={reviewSurface === 'diff' ? lastAtlasModeRef.current : reviewSurface}
-              repositoryKey={
-                prMetadata?.url
-                ?? activeWorktreePath
-                ?? agentCwd
-                ?? gitContext?.cwd
-                ?? 'local-review'
-              }
-              rawPatch={diffData?.rawPatch ?? ''}
-              onOpenDiffFile={openDiffFile}
-              onRequestCodebase={() => setReviewSurface('codebase')}
-              annotations={allAnnotations}
-              aiAvailable={aiAvailable}
-              navigationTarget={atlasNavigationTarget}
-              focusTarget={atlasFocusTarget}
-              onAddAnnotation={handleAddAtlasAnnotation}
-              onUpdateAnnotation={(id, text) => handleEditAnnotation(id, text)}
-              onDeleteAnnotation={handleDeleteAnnotation}
-              onAskAI={handleAskAIFromAtlas}
-            />
-          </div>
+          {atlasEnabled && (
+            <div className={`h-full min-h-0 flex-1 min-w-0 overflow-hidden ${guideVisible || reviewSurface === 'diff' ? 'hidden' : ''}`}>
+              <ReviewAtlasSurface
+                mode={reviewSurface === 'diff' ? lastAtlasModeRef.current : reviewSurface}
+                repositoryKey={
+                  prMetadata?.url
+                  ?? activeWorktreePath
+                  ?? agentCwd
+                  ?? gitContext?.cwd
+                  ?? 'local-review'
+                }
+                rawPatch={diffData?.rawPatch ?? ''}
+                onOpenDiffFile={openDiffFile}
+                onRequestCodebase={() => setReviewSurface('codebase')}
+                annotations={allAnnotations}
+                aiAvailable={aiAvailable}
+                navigationTarget={atlasNavigationTarget}
+                focusTarget={atlasFocusTarget}
+                onAddAnnotation={handleAddAtlasAnnotation}
+                onUpdateAnnotation={(id, text) => handleEditAnnotation(id, text)}
+                onDeleteAnnotation={handleDeleteAnnotation}
+                onAskAI={handleAskAIFromAtlas}
+              />
+            </div>
+          )}
 
           {/* Center dock area */}
           <div className={`flex-1 min-w-0 overflow-hidden relative ${guideVisible || reviewSurface !== 'diff' ? 'hidden' : ''}`}>

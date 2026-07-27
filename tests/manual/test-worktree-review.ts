@@ -1111,6 +1111,7 @@ console.error("  15. Toggle split/unified — expansion separators appear in bot
 console.error("");
 
 const server = await startReviewServer({
+  atlasEnabled: false,
   rawPatch,
   gitRef,
   error: diffError,

@@ -177,6 +177,7 @@ describe("review-workspace", () => {
       process.env.PLANNOTATOR_SEM_PATH = makeMockSem(dir, { runCwdLogPath: cwdLogPath });
 
       const server = await startReviewServer({
+        atlasEnabled: false,
         rawPatch,
         gitRef: "test",
         origin: "claude-code",
@@ -223,6 +224,7 @@ describe("review-workspace", () => {
       process.env.PLANNOTATOR_SEM_PATH = blocker.semPath;
       const initialPatch = "diff --git a/initial.txt b/initial.txt\n";
       const server = await startReviewServer({
+        atlasEnabled: false,
         rawPatch: initialPatch,
         gitRef: "Initial snapshot",
         diffType: "uncommitted",
@@ -270,6 +272,7 @@ describe("review-workspace", () => {
       process.env.PLANNOTATOR_SEM_PATH = makeMockSem(dir, { runCwdLogPath: cwdLogPath });
 
       const server = await startReviewServer({
+        atlasEnabled: false,
         rawPatch,
         gitRef: "test",
         origin: "claude-code",
@@ -297,6 +300,7 @@ describe("review-workspace", () => {
       process.env.PLANNOTATOR_SEM_PATH = makeMockSem(dir, { runCwdLogPath: cwdLogPath });
 
       const server = await startReviewServer({
+        atlasEnabled: false,
         rawPatch,
         gitRef: "test",
         origin: "claude-code",
@@ -322,6 +326,7 @@ describe("review-workspace", () => {
       process.env.PLANNOTATOR_SEM_PATH = makeMockSem(dir, { versionCounterPath });
 
       const server = await startReviewServer({
+        atlasEnabled: false,
         rawPatch,
         gitRef: "test",
         origin: "claude-code",
@@ -342,6 +347,7 @@ describe("review-workspace", () => {
       process.env.PLANNOTATOR_SEM_PATH = join(dir, "missing-sem");
 
       const server = await startReviewServer({
+        atlasEnabled: false,
         rawPatch,
         gitRef: "test",
         origin: "claude-code",
@@ -994,6 +1000,7 @@ describe("review-workspace", () => {
       const workspace = await WorkspaceReviewSession.create(runtime, root);
       const aggregate = aggregateWorkspacePatch(workspace.repos);
       const server = await startReviewServer({
+        atlasEnabled: false,
         rawPatch: aggregate.rawPatch,
         gitRef: aggregate.gitRef,
         error: aggregate.errors.join("\n") || undefined,
@@ -1369,6 +1376,7 @@ describe("review-workspace", () => {
       };
       const aggregate = aggregateWorkspacePatch(workspace.repos);
       const server = await startReviewServer({
+        atlasEnabled: false,
         rawPatch: aggregate.rawPatch,
         gitRef: aggregate.gitRef,
         error: aggregate.errors.join("\n") || undefined,

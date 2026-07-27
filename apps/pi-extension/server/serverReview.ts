@@ -253,7 +253,7 @@ export async function startReviewServer(options: {
 	rawPatch: string;
 	gitRef: string;
 	htmlContent: string;
-	atlasEnabled?: boolean;
+	atlasEnabled: boolean;
 	origin?: string;
 	diffType?: DiffType | WorkspaceDiffType;
 	gitContext?: GitContext;

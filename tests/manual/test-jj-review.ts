@@ -1182,6 +1182,7 @@ if (WITH_EVOLOG) {
 console.error("");
 
 const server = await startReviewServer({
+  atlasEnabled: false,
   rawPatch: diffResult.patch,
   gitRef: diffResult.label,
   error: diffResult.error,

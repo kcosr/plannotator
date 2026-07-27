@@ -206,6 +206,7 @@ function log(msg: string) {
 log("Starting Code Review server with external annotations demo...");
 
 const server = await startReviewServer({
+  atlasEnabled: false,
   rawPatch: sampleDiff,
   gitRef: "demo (external annotations)",
   origin: "claude-code",

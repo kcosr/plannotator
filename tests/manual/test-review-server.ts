@@ -92,6 +92,7 @@ index 1111111..2222222 100644
 console.error("Starting Code Review server with OpenCode origin...");
 
 const server = await startReviewServer({
+  atlasEnabled: false,
   rawPatch: sampleDiff,
   gitRef: "working tree",
   origin: "opencode",

@@ -398,6 +398,7 @@ describe("pi review server", () => {
 
     process.env.PLANNOTATOR_PORT = String(await reservePort());
     const server = await startReviewServer({
+      atlasEnabled: false,
       rawPatch: prepared.rawPatch,
       gitRef: prepared.gitRef,
       error: prepared.error,
@@ -575,6 +576,7 @@ describe("pi review server", () => {
     process.env.PLANNOTATOR_PORT = String(await reservePort());
     const initialPatch = "diff --git a/initial.txt b/initial.txt\n";
     const server = await startReviewServer({
+      atlasEnabled: false,
       rawPatch: initialPatch,
       gitRef: "Initial snapshot",
       diffType: "uncommitted",
@@ -624,6 +626,7 @@ describe("pi review server", () => {
     process.env.PLANNOTATOR_PORT = String(await reservePort());
 
     const server = await startReviewServer({
+      atlasEnabled: false,
       rawPatch: semanticRawPatch,
       gitRef: "test",
       origin: "pi",
@@ -668,6 +671,7 @@ describe("pi review server", () => {
     process.env.PLANNOTATOR_PORT = String(await reservePort());
 
     const server = await startReviewServer({
+      atlasEnabled: false,
       rawPatch: semanticRawPatch,
       gitRef: "test",
       origin: "pi",
@@ -695,6 +699,7 @@ describe("pi review server", () => {
     process.env.PLANNOTATOR_PORT = String(await reservePort());
 
     const server = await startReviewServer({
+      atlasEnabled: false,
       rawPatch: semanticRawPatch,
       gitRef: "test",
       origin: "pi",
@@ -720,6 +725,7 @@ describe("pi review server", () => {
     process.env.PLANNOTATOR_PORT = String(await reservePort());
 
     const server = await startReviewServer({
+      atlasEnabled: false,
       rawPatch: semanticRawPatch,
       gitRef: "test",
       origin: "pi",
@@ -759,6 +765,7 @@ describe("pi review server", () => {
     const diff = await runGitDiff("uncommitted", gitContext.defaultBranch);
 
     const server = await startReviewServer({
+      atlasEnabled: false,
       rawPatch: diff.patch,
       gitRef: diff.label,
       error: diff.error,
@@ -914,6 +921,7 @@ describe("pi review server", () => {
     const diff = await runGitDiff("uncommitted", gitContext.defaultBranch);
 
     const server = await startReviewServer({
+      atlasEnabled: false,
       rawPatch: diff.patch,
       gitRef: diff.label,
       error: diff.error,
@@ -953,6 +961,7 @@ describe("pi review server", () => {
     const diff = await runGitDiff("uncommitted", gitContext.defaultBranch);
 
     const server = await startReviewServer({
+      atlasEnabled: false,
       rawPatch: diff.patch,
       gitRef: diff.label,
       error: diff.error,
@@ -1035,6 +1044,7 @@ describe("pi review server", () => {
     };
 
     const server = await startReviewServer({
+      atlasEnabled: false,
       rawPatch: workspace.rawPatch,
       gitRef: workspace.gitRef,
       error: workspace.error,
@@ -1151,6 +1161,7 @@ describe("pi review server", () => {
     const diff = await runGitDiff("uncommitted", gitContext.defaultBranch);
 
     const server = await startReviewServer({
+      atlasEnabled: false,
       rawPatch: diff.patch,
       gitRef: diff.label,
       error: diff.error,
@@ -1242,6 +1253,7 @@ describe("pi review server", () => {
     const diff = await runGitDiff("branch", "develop");
 
     const server = await startReviewServer({
+      atlasEnabled: false,
       rawPatch: diff.patch,
       gitRef: diff.label,
       error: diff.error,
@@ -1304,6 +1316,7 @@ describe("pi review server", () => {
     expect(forcedGit.rawPatch).toContain("tracked.txt");
 
     const forcedGitServer = await startReviewServer({
+      atlasEnabled: false,
       rawPatch: forcedGit.rawPatch,
       gitRef: forcedGit.gitRef,
       error: forcedGit.error,
@@ -1332,6 +1345,7 @@ describe("pi review server", () => {
 
     process.env.PLANNOTATOR_PORT = String(await reservePort());
     const server = await startReviewServer({
+      atlasEnabled: false,
       rawPatch: prepared.rawPatch,
       gitRef: prepared.gitRef,
       error: prepared.error,

@@ -147,7 +147,7 @@ export interface ReviewServerOptions {
   /** HTML content to serve for the UI */
   htmlContent: string;
   /** Whether this review exposes the opt-in Atlas surfaces and API. */
-  atlasEnabled?: boolean;
+  atlasEnabled: boolean;
   /** Origin identifier for UI customization */
   origin?: Origin;
   /** Current diff type being displayed */
