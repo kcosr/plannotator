@@ -86,8 +86,13 @@ for (const runtime of [
         gitContext: gitContext(root),
         origin: runtime.origin,
         htmlContent: HTML,
+        atlasEnabled: true,
       });
       try {
+        const diffResponse = await fetch(`${server.url}/api/diff`);
+        expect(diffResponse.status).toBe(200);
+        expect(await diffResponse.json()).toMatchObject({ atlasEnabled: true });
+
         const snapshot = await waitForSnapshot(server.url);
         expect(snapshot).not.toHaveProperty("rootPath");
         expect((snapshot.summary as { files: number }).files).toBe(1);
@@ -111,6 +116,7 @@ for (const runtime of [
         gitRef: "HEAD",
         origin: runtime.origin,
         htmlContent: HTML,
+        atlasEnabled: true,
       });
       try {
         const response = await fetch(`${server.url}/api/atlas/status`);
@@ -149,6 +155,7 @@ for (const runtime of [
         origin: runtime.origin,
         htmlContent: HTML,
         workspace: workspace as never,
+        atlasEnabled: true,
       });
       try {
         const response = await fetch(`${server.url}/api/atlas/status`);
@@ -160,6 +167,28 @@ for (const runtime of [
             retryable: false,
           },
         });
+      } finally {
+        server.stop();
+      }
+    });
+
+    test("does not expose Atlas unless the review opts in", async () => {
+      const root = repository();
+      const server = await runtime.start({
+        rawPatch: "",
+        gitRef: "HEAD",
+        diffType: "uncommitted",
+        gitContext: gitContext(root),
+        origin: runtime.origin,
+        htmlContent: HTML,
+      });
+      try {
+        const diffResponse = await fetch(`${server.url}/api/diff`);
+        expect(diffResponse.status).toBe(200);
+        expect(await diffResponse.json()).toMatchObject({ atlasEnabled: false });
+
+        const atlasResponse = await fetch(`${server.url}/api/atlas/status`);
+        expect(atlasResponse.status).toBe(404);
       } finally {
         server.stop();
       }

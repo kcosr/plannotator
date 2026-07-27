@@ -169,6 +169,7 @@ export interface PlannotatorCodeReviewPayload {
 	defaultBranch?: string;
 	vcsType?: VcsSelection;
 	useLocal?: boolean;
+	atlasEnabled?: boolean;
 	cwd?: string;
 	prUrl?: string;
 }
@@ -375,6 +376,7 @@ export function registerPlannotatorEventListeners(
 						diffType: request.payload?.diffType,
 						vcsType: request.payload?.vcsType,
 						useLocal: request.payload?.useLocal,
+						atlasEnabled: request.payload?.atlasEnabled,
 						prUrl: request.payload?.prUrl,
 					});
 					request.respond({ status: "handled", result });

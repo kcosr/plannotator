@@ -986,6 +986,7 @@ if (args[0] === "sessions") {
     sharingEnabled,
     shareBaseUrl,
     htmlContent: reviewHtmlContent,
+    atlasEnabled: reviewArgs.atlasEnabled,
     onCleanup: worktreeCleanup,
     onReady: async (url, isRemote, port) => {
       handleReviewServerReady(url, isRemote, port);
@@ -1643,6 +1644,7 @@ if (args[0] === "sessions") {
     sharingEnabled: bridgeSharingEnabled,
     shareBaseUrl: bridgeShareBaseUrl,
     htmlContent: reviewHtmlContent,
+    atlasEnabled: reviewArgs.atlasEnabled,
     opencodeClient: makeOpenCodeBridgeClient(input.agents),
     onReady: (url, isRemote, port) => {
       handleReviewServerReady(url, isRemote, port);

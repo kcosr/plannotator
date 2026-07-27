@@ -29,7 +29,11 @@ const htmlContent = indexHtml as unknown as string;
 // Parse CLI arguments
 const args = process.argv.slice(2);
 const isStaged = args.includes("--staged");
-const gitRef = args.filter((arg) => arg !== "--staged").join(" ").trim();
+const atlasEnabled = args.includes("--atlas");
+const gitRef = args
+  .filter((arg) => arg !== "--staged" && arg !== "--atlas")
+  .join(" ")
+  .trim();
 
 // Build git diff command
 let diffCommand: string[];
@@ -66,6 +70,7 @@ const server = await startReviewServer({
   rawPatch,
   gitRef: displayRef,
   htmlContent,
+  atlasEnabled,
   onReady: (url, isRemote, port) => {
     handleReviewServerReady(url, isRemote, port);
     console.error(`Code review at ${url}`);

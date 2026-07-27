@@ -457,6 +457,7 @@ export default function plannotator(pi: ExtensionAPI): void {
 					prUrl: reviewArgs.prUrl,
 					vcsType: reviewArgs.vcsType,
 					useLocal: reviewArgs.useLocal,
+					atlasEnabled: reviewArgs.atlasEnabled,
 				});
 				ctx.ui.notify(sessionOpenedMessage("Code review opened", session.url), "info");
 				void session

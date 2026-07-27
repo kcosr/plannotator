@@ -253,6 +253,7 @@ export async function startReviewServer(options: {
 	rawPatch: string;
 	gitRef: string;
 	htmlContent: string;
+	atlasEnabled?: boolean;
 	origin?: string;
 	diffType?: DiffType | WorkspaceDiffType;
 	gitContext?: GitContext;
@@ -778,7 +779,9 @@ export async function startReviewServer(options: {
 					retryable: false,
 				};
 	}
-	const atlasRuntime = new AtlasReviewRuntimeManager(resolveAtlasReviewRoot);
+	const atlasRuntime = options.atlasEnabled
+		? new AtlasReviewRuntimeManager(resolveAtlasReviewRoot)
+		: undefined;
 	// Strict launch root for /api/open-in: in PR pool mode only the PR's own
 	// checkout is acceptable — never the launch-repo fallback resolveAgentCwd
 	// uses. Returns [] until ready so resolveOpenInTarget rejects (the button is
@@ -1456,7 +1459,7 @@ export async function startReviewServer(options: {
 		res: Parameters<typeof json>[0],
 		url: URL,
 	): Promise<boolean> => {
-		if (!url.pathname.startsWith("/api/atlas")) return false;
+		if (!atlasRuntime || !url.pathname.startsWith("/api/atlas")) return false;
 		const method = req.method?.toUpperCase() ?? "GET";
 		try {
 			if (method === "GET" && url.pathname === "/api/atlas/status") {
@@ -1721,6 +1724,7 @@ export async function startReviewServer(options: {
 			const commitInfo = await buildCommitInfoSidecar(servedDiffType as string);
 			json(res, {
 				rawPatch: servedPatch,
+				atlasEnabled: options.atlasEnabled === true,
 				aiReviewContext: buildCurrentAiReviewContext(servedPatch, servedBase, servedDiffType as DiffType),
 				aiEnabled,
 				gitRef: servedGitRef,
@@ -2928,7 +2932,7 @@ export async function startReviewServer(options: {
 			process.removeListener("exit", exitHandler);
 			agentJobs.killAll();
 			aiRuntime?.dispose();
-			void atlasRuntime.dispose();
+			void atlasRuntime?.dispose();
 			server.close();
 			// Invoke cleanup callback (e.g., remove temp worktree)
 			if (options.onCleanup) {

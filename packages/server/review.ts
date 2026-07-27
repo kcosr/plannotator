@@ -146,6 +146,8 @@ export interface ReviewServerOptions {
   error?: string;
   /** HTML content to serve for the UI */
   htmlContent: string;
+  /** Whether this review exposes the opt-in Atlas surfaces and API. */
+  atlasEnabled?: boolean;
   /** Origin identifier for UI customization */
   origin?: Origin;
   /** Current diff type being displayed */
@@ -414,7 +416,9 @@ export async function startReviewServer(
           retryable: false,
         };
   };
-  const atlasRuntime = new AtlasReviewRuntimeManager(resolveAtlasReviewRoot);
+  const atlasRuntime = options.atlasEnabled
+    ? new AtlasReviewRuntimeManager(resolveAtlasReviewRoot)
+    : undefined;
   // Failure memo: a persistently-failing checkout (network down, ref denied)
   // must not turn every code-nav hover / agent launch into a multi-second
   // re-fetch against origin. Failed URLs are skipped for a cooldown window.
@@ -1479,7 +1483,7 @@ export async function startReviewServer(
     req: Request,
     url: URL,
   ): Promise<Response | null> => {
-    if (!url.pathname.startsWith("/api/atlas")) return null;
+    if (!atlasRuntime || !url.pathname.startsWith("/api/atlas")) return null;
     const method = req.method.toUpperCase();
     try {
       if (method === "GET" && url.pathname === "/api/atlas/status") {
@@ -1718,6 +1722,7 @@ export async function startReviewServer(
             const commitInfo = await buildCommitInfoSidecar(servedDiffType as string);
             return Response.json({
               rawPatch: servedPatch,
+              atlasEnabled: options.atlasEnabled === true,
               aiReviewContext: buildCurrentAiReviewContext(servedPatch, servedBase, servedDiffType as DiffType),
               aiEnabled,
               gitRef: servedGitRef,
@@ -3078,7 +3083,7 @@ export async function startReviewServer(
       process.removeListener("exit", exitHandler);
       agentJobs.killAll();
       aiRuntime?.dispose();
-      void atlasRuntime.dispose();
+      void atlasRuntime?.dispose();
       server.stop();
       // Invoke cleanup callback (e.g., remove temp worktree)
       if (options.onCleanup) {

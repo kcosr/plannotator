@@ -85,6 +85,7 @@ type CodeReviewOptions = {
 	prUrl?: string;
 	vcsType?: VcsSelection;
 	useLocal?: boolean;
+	atlasEnabled?: boolean;
 };
 
 type CodeReviewDecision = {
@@ -555,6 +556,7 @@ async function createCodeReviewBrowserSession(
 		agentCwd,
 		worktreePool,
 		htmlContent: reviewHtmlContent,
+		atlasEnabled: options.atlasEnabled === true,
 		sharingEnabled: resolveSharingEnabled(loadConfig()),
 		shareBaseUrl: process.env.PLANNOTATOR_SHARE_URL || undefined,
 		pasteApiUrl: process.env.PLANNOTATOR_PASTE_URL || undefined,

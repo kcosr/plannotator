@@ -152,6 +152,7 @@ export async function handleReviewCommand(
     sharingEnabled: await getSharingEnabled(),
     shareBaseUrl: getShareBaseUrl(),
     htmlContent: reviewHtmlContent,
+    atlasEnabled: reviewArgs.atlasEnabled,
     opencodeClient: client,
     onReady: (url, isRemote, port) => {
       handleReviewServerReady(url, isRemote, port);

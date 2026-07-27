@@ -7,6 +7,7 @@ describe("parseReviewArgs", () => {
       prUrl: undefined,
       vcsType: undefined,
       useLocal: true,
+      atlasEnabled: false,
     });
   });
 
@@ -15,6 +16,7 @@ describe("parseReviewArgs", () => {
       prUrl: undefined,
       vcsType: "git",
       useLocal: true,
+      atlasEnabled: false,
     });
   });
 
@@ -23,6 +25,7 @@ describe("parseReviewArgs", () => {
       prUrl: undefined,
       vcsType: "gitbutler",
       useLocal: true,
+      atlasEnabled: false,
     });
   });
 
@@ -31,11 +34,13 @@ describe("parseReviewArgs", () => {
       prUrl: "https://github.com/acme/repo/pull/12",
       vcsType: "git",
       useLocal: true,
+      atlasEnabled: false,
     });
     expect(parseReviewArgs("https://github.com/acme/repo/pull/12 --git")).toEqual({
       prUrl: "https://github.com/acme/repo/pull/12",
       vcsType: "git",
       useLocal: true,
+      atlasEnabled: false,
     });
   });
 
@@ -44,6 +49,7 @@ describe("parseReviewArgs", () => {
       prUrl: "https://github.com/acme/repo/pull/12",
       vcsType: undefined,
       useLocal: false,
+      atlasEnabled: false,
     });
   });
 
@@ -52,6 +58,7 @@ describe("parseReviewArgs", () => {
       prUrl: "https://github.com/acme/repo/pull/12",
       vcsType: "git",
       useLocal: false,
+      atlasEnabled: false,
     });
   });
 
@@ -67,6 +74,25 @@ describe("parseReviewArgs", () => {
       prUrl: undefined,
       vcsType: "git",
       useLocal: true,
+      atlasEnabled: false,
+    });
+  });
+
+  test("enables Atlas only when --atlas is present", () => {
+    expect(parseReviewArgs("--atlas --git")).toEqual({
+      prUrl: undefined,
+      vcsType: "git",
+      useLocal: true,
+      atlasEnabled: true,
+    });
+    expect(parseReviewArgs([
+      "https://github.com/acme/repo/pull/12",
+      "--atlas",
+    ])).toEqual({
+      prUrl: "https://github.com/acme/repo/pull/12",
+      vcsType: undefined,
+      useLocal: true,
+      atlasEnabled: true,
     });
   });
 });
