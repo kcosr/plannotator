@@ -135,6 +135,7 @@
   color: var(--muted-foreground); border-radius: 4px; cursor: default; min-width: 0;
 }
 .atlas-tree-row:hover { color: var(--foreground); background: color-mix(in oklab, var(--foreground) 5%, transparent); }
+.atlas-tree-row:focus-visible { outline: 1px solid var(--primary); outline-offset: -1px; }
 .atlas-tree-row.is-selected { color: var(--foreground); background: color-mix(in oklab, var(--primary) 13%, transparent); }
 .atlas-tree-row.is-focus { box-shadow: inset 2px 0 var(--primary); }
 .atlas-tree-disclosure {

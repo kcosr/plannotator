@@ -106,7 +106,7 @@ for (const runtime of [
         );
         expect(traversal.status).toBe(404);
       } finally {
-        server.stop();
+        await server.stop();
       }
     });
 
@@ -129,7 +129,7 @@ for (const runtime of [
           },
         });
       } finally {
-        server.stop();
+        await server.stop();
       }
     });
 
@@ -168,7 +168,7 @@ for (const runtime of [
           },
         });
       } finally {
-        server.stop();
+        await server.stop();
       }
     });
 
@@ -190,7 +190,7 @@ for (const runtime of [
         const atlasResponse = await fetch(`${server.url}/api/atlas/status`);
         expect(atlasResponse.status).toBe(404);
       } finally {
-        server.stop();
+        await server.stop();
       }
     });
   });

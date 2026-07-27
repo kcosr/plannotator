@@ -603,18 +603,23 @@ const ReviewApp: React.FC = () => {
   }, [annotations, externalAnnotations]);
   const allAnnotationsRef = useRef(allAnnotations);
   allAnnotationsRef.current = allAnnotations;
+  const visibleAnnotations = useMemo(
+    () => allAnnotations.filter((annotation) =>
+      annotationMatchesPrScope(annotation, prMetadata?.url, prDiffScope)),
+    [allAnnotations, prDiffScope, prMetadata?.url],
+  );
   const diffAnnotations = useMemo(
-    () => allAnnotations.filter((annotation) => annotation.source !== 'atlas'),
-    [allAnnotations],
+    () => visibleAnnotations.filter((annotation) => annotation.source !== 'atlas'),
+    [visibleAnnotations],
   );
   const annotationSummary = useMemo(
-    () => allAnnotations.map((annotation) => {
+    () => visibleAnnotations.map((annotation) => {
       const lines = annotation.lineStart === annotation.lineEnd
         ? String(annotation.lineStart)
         : `${annotation.lineStart}-${annotation.lineEnd}`;
       return `- ${annotation.filePath}:${lines}: ${annotation.text ?? annotation.type}`;
     }).join('\n'),
-    [allAnnotations],
+    [visibleAnnotations],
   );
 
   // Auto-save code annotation drafts
@@ -3630,7 +3635,7 @@ const ReviewApp: React.FC = () => {
                 rawPatch={diffData?.rawPatch ?? ''}
                 onOpenDiffFile={openDiffFile}
                 onRequestCodebase={() => setReviewSurface('codebase')}
-                annotations={allAnnotations}
+                annotations={visibleAnnotations}
                 aiAvailable={aiAvailable}
                 navigationTarget={atlasNavigationTarget}
                 focusTarget={atlasFocusTarget}

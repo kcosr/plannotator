@@ -206,7 +206,7 @@ export interface ReviewServerResult {
     exit?: boolean;
   }>;
   /** Stop the server */
-  stop: () => void;
+  stop: () => Promise<void>;
 }
 
 // --- Server Implementation ---
@@ -3079,18 +3079,16 @@ export async function startReviewServer(
     url: serverUrl,
     isRemote,
     waitForDecision: () => decisionPromise,
-    stop: () => {
+    stop: async () => {
       process.removeListener("exit", exitHandler);
       agentJobs.killAll();
-      aiRuntime?.dispose();
-      void atlasRuntime?.dispose();
       server.stop();
-      // Invoke cleanup callback (e.g., remove temp worktree)
+      await Promise.all([
+        Promise.resolve(aiRuntime?.dispose()),
+        atlasRuntime?.dispose(),
+      ]);
       if (options.onCleanup) {
-        try {
-          const result = options.onCleanup();
-          if (result instanceof Promise) result.catch(() => {});
-        } catch { /* best effort */ }
+        await options.onCleanup();
       }
     },
   };

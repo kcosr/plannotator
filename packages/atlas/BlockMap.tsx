@@ -197,6 +197,25 @@ export function resolveBlockMapNodeOverlay(
   };
 }
 
+export function blockMapQueryMatches(
+  nodes: AtlasNode[],
+  query: string,
+): ReadonlySet<string> {
+  const normalized = query.trim().toLowerCase();
+  if (!normalized) return new Set(nodes.map((node) => node.id));
+  const byId = new Map(nodes.map((node) => [node.id, node]));
+  const matches = new Set<string>();
+  for (const node of nodes) {
+    if (!node.path.toLowerCase().includes(normalized)) continue;
+    let current: AtlasNode | undefined = node;
+    while (current) {
+      matches.add(current.id);
+      current = current.parentId ? byId.get(current.parentId) : undefined;
+    }
+  }
+  return matches;
+}
+
 function createBlocks(
   parent: AtlasNode,
   byId: Map<string, AtlasNode>,
@@ -292,14 +311,14 @@ export const BlockMap = memo(function BlockMap({
       .map(([language]) => language);
   }, [nodes, codeFilter]);
   const maximumChangedLines = useMemo(() => blockMapOverlayMaximum(overlay), [overlay]);
-  const normalizedQuery = query.trim().toLowerCase();
+  const queryMatches = useMemo(() => blockMapQueryMatches(nodes, query), [nodes, query]);
 
   return (
     <div ref={ref} className="atlas-block-map" role="tree" aria-label={`Contents of ${root.path || root.name}`}>
       {blocks.map(({ node, x, y, width: blockWidth, height: blockHeight, depth, container }) => {
         const compact = blockWidth < 105 || blockHeight < 58;
         const tiny = blockWidth < 52 || blockHeight < 30;
-        const matches = !normalizedQuery || node.path.toLowerCase().includes(normalizedQuery);
+        const matches = queryMatches.has(node.id);
         const relationship = relationships?.get(node.id);
         const nodeOverlay = resolveBlockMapNodeOverlay(overlay, node.id, maximumChangedLines);
         const overlayRelationship = nodeOverlay?.relationship;
@@ -389,9 +408,9 @@ export const BlockMap = memo(function BlockMap({
       {blocks.length === 0 && width > 0 && (
         <div className="atlas-empty">
           {codeFilter === 'tests'
-            ? 'No indexed Rust tests in this directory.'
+            ? 'No indexed tests in this directory.'
             : codeFilter === 'no-tests'
-              ? 'This directory contains only indexed Rust tests.'
+              ? 'This directory contains only indexed tests.'
               : 'This directory is empty.'}
         </div>
       )}

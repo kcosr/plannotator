@@ -155,6 +155,7 @@ function useAtlasData() {
     hasSnapshot: false,
     revision: -1,
     refreshing: true,
+    persistent: false,
   });
   const [snapshot, setSnapshot] = useState<AtlasSnapshot | null>(null);
   const [error, setError] = useState('');
@@ -203,7 +204,9 @@ function useAtlasData() {
       try {
         await load(controller.signal);
       } catch (reason) {
-        if (!controller.signal.aborted) recordError(reason);
+        if (!controller.signal.aborted) {
+          setError(reason instanceof Error ? reason.message : String(reason));
+        }
       }
       if (!controller.signal.aborted) timeout = window.setTimeout(poll, 900);
     };
@@ -684,6 +687,7 @@ export function AtlasWorkspace({
               targetColumn={sourceTarget?.path === selectedFile.path ? sourceTarget.column : undefined}
               targetSymbol={sourceTarget?.path === selectedFile.path ? sourceTarget.symbol : undefined}
               targetSelection={sourceTarget?.path === selectedFile.path ? sourceTarget.selection : undefined}
+              targetRequestId={sourceTarget?.path === selectedFile.path ? sourceTarget.requestId : undefined}
               onNavigateFile={onNavigateSource}
               annotations={annotations.filter((annotation) => annotation.filePath === selectedFile.path)}
               annotationControlsEnabled={capabilities.annotations}
@@ -717,6 +721,7 @@ export default function AtlasApp() {
   const [dark, setDark] = useState(() => !window.matchMedia('(prefers-color-scheme: light)').matches);
   const [sourceHistory, setSourceHistory] = useState<AtlasWorkspaceSourceTarget[]>([]);
   const [sourceHistoryIndex, setSourceHistoryIndex] = useState(-1);
+  const sourceRequestIdRef = useRef(0);
   const [annotations, setAnnotations] = useState<CodeAnnotation[]>([]);
   const [aiOpen, setAiOpen] = useState(false);
   const [aiAvailable, setAiAvailable] = useState(false);
@@ -790,11 +795,15 @@ export default function AtlasApp() {
   const openSource = useCallback((target: AtlasWorkspaceSourceTarget) => {
     const node = nodes.find((entry) => entry.path === target.path);
     if (!node || node.kind !== 'file') return;
+    const nextTarget = {
+      ...target,
+      requestId: target.requestId ?? ++sourceRequestIdRef.current,
+    };
     setSelectedId(node.id);
     setView('source');
     setSourceHistory((history) => {
       const prefix = history.slice(0, sourceHistoryIndex + 1);
-      return [...prefix, target];
+      return [...prefix, nextTarget];
     });
     setSourceHistoryIndex((index) => index + 1);
   }, [nodes, sourceHistoryIndex]);
@@ -936,6 +945,8 @@ export default function AtlasApp() {
     || indexStatus.refreshing;
   const indexStatusLabel = indexStatus.phase === 'error'
     ? 'Index error'
+    : !indexStatus.persistent && indexStatus.hasSnapshot
+      ? 'Index not saved'
     : indexStatus.phase === 'checking'
       ? 'Cached · checking'
       : indexStatus.phase === 'indexing' || indexStatus.refreshing
@@ -945,6 +956,8 @@ export default function AtlasApp() {
           : 'Fresh index';
   const indexStatusTitle = indexStatus.phase === 'error'
     ? (indexStatus.error || error || 'The repository indexer stopped unexpectedly.')
+    : !indexStatus.persistent && indexStatus.hasSnapshot
+      ? indexStatus.persistenceError || 'The current index is available only for this session.'
     : indexIsWorking
       ? 'Showing the current index while a background index is prepared'
       : `Index completed ${new Date(snapshot.generatedAt).toLocaleString()}`;

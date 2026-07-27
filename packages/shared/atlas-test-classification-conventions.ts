@@ -28,7 +28,8 @@ function isConventionalTestFile(
 	language: ConventionalTestLanguage,
 	filePath: string,
 ): boolean {
-	const name = posix.basename(filePath).toLowerCase();
+	const basename = posix.basename(filePath);
+	const name = basename.toLowerCase();
 	switch (language) {
 		case "python":
 			return (
@@ -41,7 +42,7 @@ function isConventionalTestFile(
 		case "java":
 			return (
 				hasDirectory(filePath, new Set(["test", "tests"])) ||
-				/(?:test|tests|testcase)\.java$/.test(name)
+				/(?:Test|Tests|TestCase)\.java$/.test(basename)
 			);
 		case "ruby":
 			return (

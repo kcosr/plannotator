@@ -120,16 +120,11 @@ describe("AtlasSnapshotCache", () => {
 
 		expect(cache.available).toBe(true);
 		expect(cache.set(key, value)).toBe(true);
-		expect(cache.get(key, validateSnapshot)).toEqual({
-			snapshot: value,
-			repositoryFingerprint: key.repositoryFingerprint,
-			createdAt: expect.any(String),
-		});
-		expect(cache.getLatest(5, validateSnapshot)).toEqual({
-			snapshot: value,
-			repositoryFingerprint: key.repositoryFingerprint,
-			createdAt: expect.any(String),
-		});
+			expect(cache.get(key, validateSnapshot)).toEqual({
+				snapshot: value,
+				repositoryFingerprint: key.repositoryFingerprint,
+				createdAt: expect.any(String),
+			});
 		expect(cache.get({
 			...key,
 			repositoryFingerprint: "sha256:repository-b",
@@ -137,7 +132,7 @@ describe("AtlasSnapshotCache", () => {
 		expect(cache.get({ ...key, snapshotVersion: 4 }, validateSnapshot)).toBeNull();
 	});
 
-	test("replaces stale fingerprints for the same repository and snapshot version", async () => {
+	test("retains snapshots for multiple repository fingerprints", async () => {
 		const directory = temporaryDirectory();
 		const root = join(directory, "repo");
 		mkdirSync(root);
@@ -148,12 +143,10 @@ describe("AtlasSnapshotCache", () => {
 		};
 		const secondKey = { ...firstKey, repositoryFingerprint: "sha256:second" };
 
-		expect(cache.set(firstKey, snapshot(root))).toBe(true);
-		expect(cache.set(secondKey, snapshot(root))).toBe(true);
-		expect(cache.get(firstKey, validateSnapshot)).toBeNull();
-		expect(cache.get(secondKey, validateSnapshot)?.snapshot).toEqual(snapshot(root));
-		expect(cache.getLatest(5, validateSnapshot)?.repositoryFingerprint)
-			.toBe(secondKey.repositoryFingerprint);
+			expect(cache.set(firstKey, snapshot(root))).toBe(true);
+			expect(cache.set(secondKey, snapshot(root))).toBe(true);
+			expect(cache.get(firstKey, validateSnapshot)?.snapshot).toEqual(snapshot(root));
+			expect(cache.get(secondKey, validateSnapshot)?.snapshot).toEqual(snapshot(root));
 	});
 
 	test("evicts snapshots rejected by the caller validator", async () => {
@@ -165,9 +158,8 @@ describe("AtlasSnapshotCache", () => {
 			repositoryFingerprint: "sha256:repository",
 			snapshotVersion: 5,
 		};
-		expect(cache.set(key, snapshot(root))).toBe(true);
-		expect(cache.get(key, (_value): _value is AtlasSnapshot => false)).toBeNull();
-		expect(cache.getLatest(5, validateSnapshot)).toBeNull();
+			expect(cache.set(key, snapshot(root))).toBe(true);
+			expect(cache.get(key, (_value): _value is AtlasSnapshot => false)).toBeNull();
 	});
 
 	test("rejects mismatched snapshot metadata", async () => {
@@ -210,9 +202,8 @@ describe("AtlasSnapshotCache", () => {
 			].join(""),
 			databasePath,
 		], { encoding: "utf8" });
-		expect(mutation.status).toBe(0);
-		expect(cache.get(key, validateSnapshot)).toBeNull();
-		expect(cache.getLatest(5, validateSnapshot)).toBeNull();
+			expect(mutation.status).toBe(0);
+			expect(cache.get(key, validateSnapshot)).toBeNull();
 	});
 
 	test("creates a database Node can read after Bun writes it", async () => {

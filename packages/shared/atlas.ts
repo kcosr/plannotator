@@ -283,6 +283,34 @@ function displayLanguageForPath(filePath: string): { language: string; extension
 	};
 }
 
+function analysisLanguageForFile(
+	file: AcceptedFile,
+	outline: StructuralFileOutline | undefined,
+	acceptedPaths: ReadonlySet<string>,
+): { language: string; extension: string } {
+	const identified = displayLanguageForPath(file.path);
+	if (identified.extension !== ".h") return identified;
+	const outlineLanguage = outline?.language.toLowerCase() ?? "";
+	const source = file.content ?? "";
+	const hasCppSyntax =
+		/\b(?:namespace|template\s*<|constexpr|consteval|constinit|noexcept|std::)\b/.test(source) ||
+		/\b(?:class|typename)\s+[A-Za-z_]\w*/.test(source) ||
+		/\busing\s+[A-Za-z_]\w*\s*=/.test(source);
+	const stem = file.path.slice(0, -2);
+	const hasCppTranslationUnit = [".cc", ".cpp", ".cxx"].some(
+		(extension) => acceptedPaths.has(`${stem}${extension}`),
+	);
+	return {
+		language: (
+			outlineLanguage.includes("cpp") ||
+			outlineLanguage.includes("c++") ||
+			hasCppSyntax ||
+			hasCppTranslationUnit
+		) ? "cpp" : "c",
+		extension: ".h",
+	};
+}
+
 async function listGitFiles(rootPath: string, maxFiles: number): Promise<string[] | null> {
 	try {
 		const { stdout } = await execFileAsync(
@@ -527,8 +555,9 @@ function analyzeOutline(
 	filePath: string,
 	content: string,
 	outline: StructuralFileOutline | undefined,
+	identifiedOverride?: { language: string; extension: string },
 ): FileAnalysis | null {
-	const identified = languageForPath(filePath);
+	const identified = identifiedOverride ?? languageForPath(filePath);
 	if (!identified) {
 		const display = displayLanguageForPath(filePath);
 		return {
@@ -952,10 +981,22 @@ export async function buildAtlasSnapshot(
 			.filter((file) => file.content !== null && languageForPath(file.path) !== null)
 			.map((file) => file.path),
 	);
+	const acceptedPaths = new Set(acceptedFiles.map((file) => file.path));
+	const analysisLanguageByPath = new Map(
+		acceptedFiles.map((file) => [
+			file.path,
+			analysisLanguageForFile(
+				file,
+				structure.files.get(file.path),
+				acceptedPaths,
+			),
+		]),
+	);
 	const testRangesByPath = classifyRustRepositoryTestRanges(
 		acceptedFiles
 			.filter((file): file is AcceptedFile & { content: string } =>
-				file.content !== null && languageForPath(file.path)?.language === "rust")
+				file.content !== null &&
+				analysisLanguageByPath.get(file.path)?.language === "rust")
 			.map((file) => ({
 				...file,
 				outline: structure.files.get(file.path),
@@ -963,7 +1004,7 @@ export async function buildAtlasSnapshot(
 	);
 	for (const file of acceptedFiles) {
 		if (file.content === null) continue;
-		const language = languageForPath(file.path)?.language;
+		const language = analysisLanguageByPath.get(file.path)?.language;
 		if (language === "typescript" || language === "javascript") {
 			testRangesByPath.set(
 				file.path,
@@ -1004,9 +1045,11 @@ export async function buildAtlasSnapshot(
 	}
 
 	for (const accepted of acceptedFiles) {
+		const identified = analysisLanguageByPath.get(accepted.path) ??
+			displayLanguageForPath(accepted.path);
 		const analysis = accepted.content === null
 			? {
-				...displayLanguageForPath(accepted.path),
+				...identified,
 				lines: accepted.lines,
 				complexity: 0,
 				symbols: [],
@@ -1016,6 +1059,7 @@ export async function buildAtlasSnapshot(
 				accepted.path,
 				accepted.content,
 				structure.files.get(accepted.path),
+				identified,
 			);
 		if (!analysis) {
 			skippedFiles += 1;

@@ -43,6 +43,7 @@ export interface AtlasSourceNavigationTarget {
   column?: number;
   symbol?: string;
   selection?: 'line' | 'symbol';
+  requestId?: number;
 }
 
 export interface AtlasSourceLoaders {
@@ -71,6 +72,7 @@ export interface SourceViewProps {
   targetColumn?: number;
   targetSymbol?: string;
   targetSelection?: 'line' | 'symbol';
+  targetRequestId?: number;
   codeFilter: CodeFilter;
   loaders: AtlasSourceLoaders;
   onNavigateFile: (target: AtlasSourceNavigationTarget) => void;
@@ -279,6 +281,7 @@ export function SourceView({
   targetColumn,
   targetSymbol,
   targetSelection,
+  targetRequestId,
   codeFilter,
   loaders,
   onNavigateFile,
@@ -324,9 +327,18 @@ export function SourceView({
 
   useEffect(() => {
     const controller = new AbortController();
+    referenceRequestRef.current?.abort();
     setLoading(true);
     setError('');
     setSource(null);
+    setQuery('');
+    setMatchIndex(0);
+    setReferenceState(null);
+    setCallState({ loading: false, result: null });
+    setNavigationHighlight(null);
+    setComposeSelection(null);
+    setComposeText('');
+    setEditingAnnotationId(null);
     loadSource(node.path, controller.signal)
       .then(setSource)
       .catch((reason: unknown) => {
@@ -336,13 +348,7 @@ export function SourceView({
         if (!controller.signal.aborted) setLoading(false);
       });
     return () => controller.abort();
-  }, [loadSource, node.path]);
-
-  useEffect(() => {
-    setComposeSelection(null);
-    setComposeText('');
-    setEditingAnnotationId(null);
-  }, [node.path]);
+  }, [loadSource, node.path, snapshotGeneratedAt]);
 
   const matches = useMemo(() => {
     if (!source || !query.trim()) return [];
@@ -411,7 +417,16 @@ export function SourceView({
     });
     const timeout = window.setTimeout(() => scrollToLine(targetLine), 180);
     return () => window.clearTimeout(timeout);
-  }, [source, node, targetLine, targetColumn, targetSymbol, targetSelection, scrollToLine]);
+  }, [
+    source,
+    node,
+    targetLine,
+    targetColumn,
+    targetSymbol,
+    targetSelection,
+    targetRequestId,
+    scrollToLine,
+  ]);
 
   useEffect(() => {
     if (matches.length === 0) return;
@@ -477,7 +492,7 @@ export function SourceView({
     if (targetSymbol && targetLine && targetColumn) {
       inspectSymbol(targetSymbol, targetLine, targetColumn);
     }
-  }, [targetSymbol, targetLine, targetColumn, inspectSymbol]);
+  }, [targetSymbol, targetLine, targetColumn, targetRequestId, inspectSymbol]);
 
   useEffect(() => {
     const selectedSymbol = referenceState?.symbol;

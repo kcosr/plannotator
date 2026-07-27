@@ -215,6 +215,7 @@ export class AtlasSnapshotCache {
 	readonly initializationError?: string;
 
 	#database: SqliteDatabase | null;
+	#lastError: string | undefined;
 
 	private constructor(
 		indexPath: string,
@@ -265,42 +266,26 @@ export class AtlasSnapshotCache {
 					AND snapshot_version = ?
 			`).get(key.repositoryFingerprint, key.snapshotVersion);
 			return this.#parseEntry(row, key, validateSnapshot);
-		} catch {
+		} catch (error) {
+			this.#lastError = error instanceof Error ? error.message : String(error);
 			return null;
 		}
 	}
 
-	getLatest(
-		snapshotVersion: number,
-		validateSnapshot: AtlasSnapshotValidator,
-	): AtlasSnapshotCacheEntry | null {
-		if (
-			!this.#database ||
-			!Number.isInteger(snapshotVersion) ||
-			snapshotVersion < 1
-		) return null;
-		try {
-			const row = this.#database.prepare(`
-				SELECT repository_fingerprint, snapshot_json, created_at
-				FROM atlas_snapshots
-				WHERE snapshot_version = ?
-				ORDER BY created_at DESC
-				LIMIT 1
-			`).get(snapshotVersion);
-			if (!isStoredSnapshotRow(row)) return null;
-			return this.#parseEntry(row, {
-				repositoryFingerprint: row.repository_fingerprint,
-				snapshotVersion,
-			}, validateSnapshot);
-		} catch {
-			return null;
-		}
+	get lastError(): string | undefined {
+		return this.#lastError ?? this.initializationError;
 	}
 
 	set(key: AtlasSnapshotCacheKey, snapshot: AtlasSnapshot): boolean {
-		if (!this.#database || !validKey(key) || !isRecord(snapshot)) return false;
+		if (!this.#database || !validKey(key) || !isRecord(snapshot)) {
+			this.#lastError = this.initializationError ?? "Atlas snapshot cache is unavailable";
+			return false;
+		}
 		try {
-			if (snapshot.version !== key.snapshotVersion) return false;
+			if (snapshot.version !== key.snapshotVersion) {
+				this.#lastError = "Atlas snapshot version does not match the cache key";
+				return false;
+			}
 			const envelope: StoredSnapshotEnvelope = {
 				cacheSchemaVersion: ATLAS_SNAPSHOT_CACHE_SCHEMA_VERSION,
 				snapshotVersion: key.snapshotVersion,
@@ -311,16 +296,16 @@ export class AtlasSnapshotCache {
 			this.#database.exec("BEGIN IMMEDIATE");
 			try {
 				this.#database.prepare(`
-					DELETE FROM atlas_snapshots
-					WHERE snapshot_version = ?
-				`).run(key.snapshotVersion);
-				this.#database.prepare(`
 					INSERT INTO atlas_snapshots (
 						repository_fingerprint,
 						snapshot_version,
 						snapshot_json,
 						created_at
 					) VALUES (?, ?, ?, ?)
+					ON CONFLICT(repository_fingerprint, snapshot_version)
+					DO UPDATE SET
+						snapshot_json = excluded.snapshot_json,
+						created_at = excluded.created_at
 				`).run(
 					key.repositoryFingerprint,
 					key.snapshotVersion,
@@ -331,9 +316,11 @@ export class AtlasSnapshotCache {
 			} catch (error) {
 				this.#database.exec("ROLLBACK");
 				throw error;
-			}
-			return true;
-		} catch {
+				}
+				this.#lastError = undefined;
+				return true;
+		} catch (error) {
+			this.#lastError = error instanceof Error ? error.message : String(error);
 			return false;
 		}
 	}

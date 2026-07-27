@@ -281,7 +281,9 @@ function ScopeSidebar({
   onOpenHotspot: (hotspot: ReviewAtlasSymbolHotspot) => void;
   onRetryImpact: () => void;
 }) {
+  const [hotspotLimit, setHotspotLimit] = useState(75);
   const selectedHotspot = scope.hotspots.find((hotspot) => hotspot.id === selectedHotspotId) ?? null;
+  useEffect(() => setHotspotLimit(75), [scope]);
   return (
     <aside className="review-atlas-scope-sidebar" aria-label="Change hotspots and impact">
       <section className="review-atlas-hotspots">
@@ -290,7 +292,7 @@ function ScopeSidebar({
           <strong>{scope.hotspots.length}</strong>
         </header>
         <div className="review-atlas-hotspot-list">
-          {scope.hotspots.slice(0, 75).map((hotspot, index) => (
+          {scope.hotspots.slice(0, hotspotLimit).map((hotspot, index) => (
             <button
               type="button"
               key={hotspot.id}
@@ -319,6 +321,15 @@ function ScopeSidebar({
               <FileCode2 size={16} aria-hidden />
               <span>No indexed symbols overlap the changed new-side lines.</span>
             </div>
+          )}
+          {scope.hotspots.length > hotspotLimit && (
+            <button
+              type="button"
+              className="review-atlas-hotspot-more"
+              onClick={() => setHotspotLimit((current) => current + 75)}
+            >
+              Show more ({scope.hotspots.length - hotspotLimit} remaining)
+            </button>
           )}
         </div>
       </section>
@@ -382,6 +393,7 @@ export function ReviewAtlasSurface({
   );
   const [sourceHistory, setSourceHistory] = useState<AtlasWorkspaceSourceTarget[]>([]);
   const [sourceHistoryIndex, setSourceHistoryIndex] = useState(-1);
+  const sourceRequestIdRef = useRef(0);
   const [selectedHotspotId, setSelectedHotspotId] = useState<string | null>(null);
   const [impactState, setImpactState] = useState<ImpactState>({ kind: 'idle' });
   const repositoryKeyRef = useRef(repositoryKey);
@@ -444,12 +456,31 @@ export function ReviewAtlasSurface({
         timer = setTimeout(poll, working ? 900 : 3000);
       } catch (reason) {
         if (disposed || controller.signal.aborted) return;
-        setSurfaceState({
-          kind: isUnavailableError(reason) ? 'unavailable' : 'error',
-          message: isUnavailableError(reason)
-            ? 'This review session does not expose Atlas indexing endpoints.'
-            : errorMessage(reason),
-        });
+        const unavailable = isUnavailableError(reason);
+        const snapshot = snapshotRef.current;
+        if (snapshot && !unavailable) {
+          setSurfaceState({
+            kind: 'ready',
+            status: {
+              status: 'error',
+              phase: 'error',
+              hasSnapshot: true,
+              revision: loadedRevisionRef.current ?? 0,
+              refreshing: false,
+              persistent: false,
+              error: errorMessage(reason),
+            },
+            snapshot,
+          });
+        } else {
+          setSurfaceState({
+            kind: unavailable ? 'unavailable' : 'error',
+            message: unavailable
+              ? 'This review session does not expose Atlas indexing endpoints.'
+              : errorMessage(reason),
+          });
+        }
+        timer = setTimeout(poll, 3000);
       }
     };
 
@@ -556,11 +587,15 @@ export function ReviewAtlasSurface({
   const openSource = useCallback((target: AtlasWorkspaceSourceTarget) => {
     const node = nodes.find((entry) => entry.kind === 'file' && entry.path === target.path);
     if (!node) return;
+    const nextTarget = {
+      ...target,
+      requestId: target.requestId ?? ++sourceRequestIdRef.current,
+    };
     setSelectedId(node.id);
     setView('source');
     setSourceHistory((history) => [
       ...history.slice(0, sourceHistoryIndex + 1),
-      target,
+      nextTarget,
     ]);
     setSourceHistoryIndex((index) => index + 1);
   }, [nodes, sourceHistoryIndex]);
@@ -710,13 +745,25 @@ export function ReviewAtlasSurface({
           </div>
         )}
         <div
-          className={`review-atlas-host__index${indexWorking ? ' is-working' : ''}`}
-          title={`Indexed ${new Date(snapshot.generatedAt).toLocaleString()}`}
+          className={`review-atlas-host__index${indexWorking ? ' is-working' : ''}${
+            surfaceState.status.phase === 'error' ? ' is-error' : ''
+          }`}
+          title={surfaceState.status.phase === 'error'
+            ? surfaceState.status.error || 'The current map may be stale.'
+            : !surfaceState.status.persistent
+              ? surfaceState.status.persistenceError || 'The current index is not persisted.'
+            : `Indexed ${new Date(snapshot.generatedAt).toLocaleString()}`}
         >
-          {indexWorking
+          {surfaceState.status.phase === 'error'
+            ? <CircleAlert size={12} aria-hidden />
+            : indexWorking
             ? <LoaderCircle size={12} className="review-atlas-spin" aria-hidden />
             : <CircleCheck size={12} aria-hidden />}
-          <span>{indexWorking ? 'Updating index' : 'Index ready'}</span>
+          <span>{surfaceState.status.phase === 'error'
+            ? 'Index stale'
+            : !surfaceState.status.persistent
+              ? 'Index not saved'
+            : indexWorking ? 'Updating index' : 'Index ready'}</span>
         </div>
       </div>
       <div className={`review-atlas-host__workspace${mode === 'scope' ? ' is-scope' : ''}`}>

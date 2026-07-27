@@ -88,13 +88,7 @@ describe("classifyJavaScriptTestRanges", () => {
 		)).toEqual([
 			{
 				startLine: 3,
-				endLine: 3,
-				reason: "js-test-call",
-				confidence: "semantic",
-			},
-			{
-				startLine: 4,
-				endLine: 4,
+				endLine: 7,
 				reason: "js-test-call",
 				confidence: "semantic",
 			},
@@ -145,7 +139,7 @@ describe("classifyJavaScriptTestRanges", () => {
 			undefined,
 		)).toEqual([{
 			startLine: 2,
-			endLine: 2,
+			endLine: 4,
 			reason: "js-test-call",
 			confidence: "semantic",
 		}]);

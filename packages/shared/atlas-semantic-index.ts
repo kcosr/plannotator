@@ -516,6 +516,38 @@ export class AtlasSemanticIndexStore {
 		};
 	}
 
+	findReferencesAtLocation(
+		descriptor: QueryDescriptor,
+	): AtlasReferenceResponse | null {
+		if (!this.#database) return null;
+		const row = this.#database.prepare(`
+			SELECT queries.query_key
+			FROM atlas_semantic_queries AS queries
+			INNER JOIN atlas_semantic_references AS locations
+				ON locations.query_key = queries.query_key
+			WHERE queries.repository_fingerprint = ?
+				AND queries.snapshot_version = ?
+				AND queries.provider_fingerprint = ?
+				AND queries.query_kind = 'references'
+				AND queries.symbol = ?
+				AND locations.file_path = ?
+				AND locations.line = ?
+				AND locations.column_number = ?
+			ORDER BY queries.created_at DESC
+			LIMIT 1
+		`).get(
+			descriptor.repositoryFingerprint,
+			descriptor.snapshotVersion,
+			descriptor.providerFingerprint,
+			descriptor.symbol,
+			descriptor.filePath,
+			descriptor.line,
+			descriptor.column,
+		);
+		if (!isRecord(row) || typeof row.query_key !== "string") return null;
+		return this.getReferences({ ...descriptor, queryKey: row.query_key });
+	}
+
 	getCalls(descriptor: QueryDescriptor): AtlasCallHierarchyResponse | null {
 		const query = this.#getQuery(descriptor);
 		if (!query) return null;
@@ -613,6 +645,64 @@ export class AtlasSemanticIndexStore {
 				...(query.provider_message && { message: query.provider_message }),
 			},
 		};
+	}
+
+	findCallsAtLocation(descriptor: QueryDescriptor): AtlasCallHierarchyResponse | null {
+		if (!this.#database) return null;
+		const row = this.#database.prepare(`
+			SELECT query_key
+			FROM (
+				SELECT
+					queries.query_key AS query_key,
+					CASE targets.direction WHEN 'caller' THEN 0 WHEN 'root' THEN 1 ELSE 2 END
+						AS priority,
+					queries.created_at AS created_at
+				FROM atlas_semantic_queries AS queries
+				INNER JOIN atlas_semantic_call_targets AS targets
+					ON targets.query_key = queries.query_key
+				WHERE queries.repository_fingerprint = ?
+					AND queries.snapshot_version = ?
+					AND queries.provider_fingerprint = ?
+					AND queries.query_kind = 'calls'
+					AND targets.file_path = ?
+					AND targets.line = ?
+					AND targets.column_number = ?
+				UNION ALL
+				SELECT
+					queries.query_key AS query_key,
+					CASE targets.direction WHEN 'caller' THEN 0 ELSE 3 END AS priority,
+					queries.created_at AS created_at
+				FROM atlas_semantic_queries AS queries
+				INNER JOIN atlas_semantic_call_targets AS targets
+					ON targets.query_key = queries.query_key
+				INNER JOIN atlas_semantic_call_sites AS sites
+					ON sites.target_key = targets.target_key
+				WHERE queries.repository_fingerprint = ?
+					AND queries.snapshot_version = ?
+					AND queries.provider_fingerprint = ?
+					AND queries.query_kind = 'calls'
+					AND sites.file_path = ?
+					AND sites.line = ?
+					AND sites.column_number = ?
+			)
+			ORDER BY priority, created_at DESC
+			LIMIT 1
+		`).get(
+			descriptor.repositoryFingerprint,
+			descriptor.snapshotVersion,
+			descriptor.providerFingerprint,
+			descriptor.filePath,
+			descriptor.line,
+			descriptor.column,
+			descriptor.repositoryFingerprint,
+			descriptor.snapshotVersion,
+			descriptor.providerFingerprint,
+			descriptor.filePath,
+			descriptor.line,
+			descriptor.column,
+		);
+		if (!isRecord(row) || typeof row.query_key !== "string") return null;
+		return this.getCalls({ ...descriptor, queryKey: row.query_key });
 	}
 
 	setReferences(
@@ -731,26 +821,18 @@ export class AtlasSemanticIndexStore {
 				provider_message,
 				truncated
 			FROM atlas_semantic_queries
-			WHERE query_key = ?
-				AND repository_fingerprint = ?
-				AND snapshot_version = ?
-				AND provider_fingerprint = ?
-				AND query_kind = ?
-				AND file_path = ?
-				AND line = ?
-				AND column_number = ?
-				AND symbol = ?
-		`).get(
-			descriptor.queryKey,
-			descriptor.repositoryFingerprint,
-			descriptor.snapshotVersion,
-			descriptor.providerFingerprint,
-			descriptor.kind,
-			descriptor.filePath,
-			descriptor.line,
-			descriptor.column,
-			descriptor.symbol,
-		);
+				WHERE query_key = ?
+					AND repository_fingerprint = ?
+					AND snapshot_version = ?
+					AND provider_fingerprint = ?
+					AND query_kind = ?
+			`).get(
+				descriptor.queryKey,
+				descriptor.repositoryFingerprint,
+				descriptor.snapshotVersion,
+				descriptor.providerFingerprint,
+				descriptor.kind,
+			);
 		return isStoredQueryRow(row) ? row : null;
 	}
 
@@ -875,8 +957,9 @@ export class AtlasSemanticIndexService {
 		input: AtlasSemanticReferenceInput,
 	): Promise<AtlasSemanticLookup<AtlasReferenceResponse>> {
 		this.#assertActive();
-		const descriptor = this.#descriptor("references", input, input.symbol);
-		const cached = this.#store.getReferences(descriptor);
+			const descriptor = this.#descriptor("references", input, input.symbol);
+			const cached = this.#store.getReferences(descriptor)
+				?? this.#store.findReferencesAtLocation(descriptor);
 		if (cached) {
 			return {
 				response: cached,
@@ -907,8 +990,9 @@ export class AtlasSemanticIndexService {
 		input: AtlasSemanticQueryInput,
 	): Promise<AtlasSemanticLookup<AtlasCallHierarchyResponse>> {
 		this.#assertActive();
-		const descriptor = this.#descriptor("calls", input, "");
-		const cached = this.#store.getCalls(descriptor);
+			const descriptor = this.#descriptor("calls", input, "");
+			const cached = this.#store.getCalls(descriptor)
+				?? this.#store.findCallsAtLocation(descriptor);
 		if (cached) {
 			return {
 				response: cached,

@@ -59,7 +59,7 @@ export interface ExploreServerResult {
   isRemote: boolean;
   waitForClose: () => Promise<void>;
   waitForFeedback: () => Promise<AtlasFeedbackResult | null>;
-  stop: () => void;
+  stop: () => Promise<void>;
 }
 
 export interface AtlasFeedbackResult {
@@ -135,6 +135,11 @@ export async function indexAtlasRepository(
     const generation = session.getSnapshotGeneration();
     if (!snapshot || !generation || status.status === "error") {
       throw new Error(status.error ?? "Atlas indexing failed");
+    }
+    if (!status.persistent) {
+      throw new Error(
+        status.persistenceError ?? `Atlas index could not be persisted at ${session.indexPath}`,
+      );
     }
     let semantic: AtlasSemanticIndexProgress | undefined;
     if (options.semantic) {
@@ -383,11 +388,21 @@ export async function startExploreServer(
     closeResolved = true;
     resolveClose();
   };
+  let completionPromise: Promise<void> | undefined;
   const resolveFeedbackOnce = (feedback: AtlasFeedbackResult | null) => {
     if (feedbackResolved) return false;
     feedbackResolved = true;
-    resolveFeedback(feedback);
-    resolveCloseOnce();
+    completionPromise = disposeRuntimes()
+      .catch((error) => {
+        console.warn(
+          "[plannotator] Atlas shutdown failed:",
+          error instanceof Error ? error.message : String(error),
+        );
+      })
+      .then(() => {
+        resolveFeedback(feedback);
+        resolveCloseOnce();
+      });
     return true;
   };
   let disposePromise: Promise<void> | undefined;
@@ -539,13 +554,13 @@ export async function startExploreServer(
           if (!resolveFeedbackOnce(feedback)) {
             return jsonError("Atlas session is already closed", 409);
           }
-          await disposeRuntimes();
+          await completionPromise;
           return Response.json(feedback);
         }
 
         if (method === "POST" && url.pathname === "/api/atlas/close") {
           resolveFeedbackOnce(null);
-          await disposeRuntimes();
+          await completionPromise;
           return Response.json({ ok: true });
         }
 
@@ -596,7 +611,7 @@ export async function startExploreServer(
   } catch (error) {
     stopped = true;
     resolveFeedbackOnce(null);
-    await disposeRuntimes();
+    await completionPromise;
     server.stop();
     throw error;
   }
@@ -607,12 +622,15 @@ export async function startExploreServer(
     isRemote,
     waitForClose: () => closePromise,
     waitForFeedback: () => feedbackPromise,
-    stop: () => {
-      if (stopped) return;
+    stop: async () => {
+      if (stopped) {
+        await completionPromise;
+        return;
+      }
       stopped = true;
       resolveFeedbackOnce(null);
-      void disposeRuntimes();
       server.stop();
+      await completionPromise;
     },
   };
 }

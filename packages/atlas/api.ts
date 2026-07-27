@@ -13,6 +13,8 @@ export interface AtlasIndexStatus {
   revision: number;
   source?: 'cache' | 'fresh';
   refreshing: boolean;
+  persistent: boolean;
+  persistenceError?: string;
   error?: string;
 }
 

@@ -54,6 +54,7 @@ describe('buildReviewSubmission', () => {
       lineEnd: 16,
       side: 'new',
       text: 'Check every caller before changing this contract.',
+      originalCode: 'return serve(request);',
       createdAt: 1,
       source: 'atlas',
     };
@@ -70,5 +71,6 @@ describe('buildReviewSubmission', () => {
     expect(submission.targets[0]?.fileScopedBody).toContain(
       '**src/service.ts:14-16 (codebase source):** Check every caller',
     );
+    expect(submission.targets[0]?.fileScopedBody).toContain('return serve(request);');
   });
 });

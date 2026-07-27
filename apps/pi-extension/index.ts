@@ -548,7 +548,7 @@ export default function plannotator(pi: ExtensionAPI): void {
 				void session
 					.waitForFeedback()
 					.then((feedback) => {
-						session.stop();
+						void session.stop();
 						if (feedback?.markdown) {
 							sendUserMessageWithCurrentSessionFallback(
 								pi,
@@ -562,7 +562,7 @@ export default function plannotator(pi: ExtensionAPI): void {
 						safeNotify(ctx, "Codebase Atlas session closed.", "info", origin);
 					})
 					.catch((error) => {
-						session.stop();
+						void session.stop();
 						reportBackgroundError(ctx, "Codebase Atlas session failed", error, origin);
 					});
 			} catch (error) {

@@ -117,6 +117,7 @@ export function pendingAtlasReviewStatus(
 		hasSnapshot: false,
 		revision: 0,
 		refreshing: true,
+		persistent: false,
 		capability: {
 			available: false,
 			code: resolution.code,

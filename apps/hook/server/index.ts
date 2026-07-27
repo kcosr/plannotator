@@ -602,7 +602,7 @@ if (args[0] === "sessions") {
   }
   await Bun.sleep(250);
   process.removeListener("exit", stopOnExit);
-  server.stop();
+  await server.stop();
   process.exit(0);
 
 } else if (args[0] === "setup-goal") {
@@ -1014,7 +1014,7 @@ if (args[0] === "sessions") {
   await Bun.sleep(1500);
 
   // Cleanup
-  server.stop();
+  await server.stop();
 
   // Output feedback (captured by slash command)
   if (result.exit) {

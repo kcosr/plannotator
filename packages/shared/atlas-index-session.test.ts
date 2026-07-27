@@ -92,9 +92,10 @@ afterEach(async () => {
 });
 
 describe("AtlasIndexSession", () => {
-	test("hydrates a matching cached snapshot before checking freshness", async () => {
+	test("hydrates a matching cached snapshot after verifying its fingerprint", async () => {
 		const { root, databasePath } = temporaryRepository();
 		const cached = snapshot(root, "2026-07-26T10:00:00.000Z");
+		cached.rootName = "different-checkout-name";
 		await seedCache(root, databasePath, "fingerprint-a", cached);
 		let builds = 0;
 		const session = await AtlasIndexSession.open({
@@ -108,23 +109,31 @@ describe("AtlasIndexSession", () => {
 		});
 		sessions.push(session);
 
-		expect(session.getSnapshot()).toEqual(cached);
-		expect(session.getSnapshotGeneration()).toEqual({
-			snapshot: cached,
-			repositoryFingerprint: "fingerprint-a",
-		});
+		expect(session.getSnapshot()).toBeUndefined();
+		expect(session.getSnapshotGeneration()).toBeUndefined();
 		expect(session.getStatus()).toEqual({
 			status: "indexing",
 			phase: "checking",
-			hasSnapshot: true,
-			revision: 1,
-			source: "cache",
+			hasSnapshot: false,
+			revision: 0,
 			refreshing: false,
+			persistent: true,
 		});
 		session.start();
 		expect(session.getStatus().refreshing).toBe(true);
 		await session.waitUntilIdle();
 		expect(builds).toBe(0);
+		expect(session.getSnapshot()).toEqual({
+			...cached,
+			rootName: "repository",
+		});
+		expect(session.getSnapshotGeneration()).toEqual({
+			snapshot: {
+				...cached,
+				rootName: "repository",
+			},
+			repositoryFingerprint: "fingerprint-a",
+		});
 		expect(session.getStatus()).toEqual({
 			status: "ready",
 			phase: "ready",
@@ -132,6 +141,7 @@ describe("AtlasIndexSession", () => {
 			revision: 1,
 			source: "cache",
 			refreshing: false,
+			persistent: true,
 		});
 	});
 
@@ -156,13 +166,13 @@ describe("AtlasIndexSession", () => {
 		session.start();
 		await buildStarted.promise;
 
-		expect(session.getSnapshot()).toEqual(cached);
+		expect(session.getSnapshot()).toBeUndefined();
 		expect(session.getStatus()).toMatchObject({
 			status: "indexing",
 			phase: "indexing",
-			hasSnapshot: true,
-			source: "cache",
+			hasSnapshot: false,
 			refreshing: true,
+			persistent: true,
 		});
 		releaseBuild.resolve();
 		await session.waitUntilIdle();
@@ -175,14 +185,18 @@ describe("AtlasIndexSession", () => {
 			status: "ready",
 			phase: "ready",
 			hasSnapshot: true,
-			revision: 2,
+			revision: 1,
 			source: "fresh",
 			refreshing: false,
+			persistent: true,
 		});
 
 		await session.dispose();
 		const cache = await openAtlasSnapshotCache({ rootPath: root, indexPath: databasePath });
-		expect(cache.getLatest(ATLAS_SNAPSHOT_VERSION, isAtlasSnapshot))
+			expect(cache.get({
+				repositoryFingerprint: "fingerprint-new",
+				snapshotVersion: ATLAS_SNAPSHOT_VERSION,
+			}, isAtlasSnapshot))
 			.toMatchObject({
 				snapshot: fresh,
 				repositoryFingerprint: "fingerprint-new",
@@ -190,7 +204,7 @@ describe("AtlasIndexSession", () => {
 		cache.close();
 	});
 
-	test("preserves a cached snapshot and warning when background indexing fails", async () => {
+	test("does not expose an unrelated cached snapshot when indexing fails", async () => {
 		const { root, databasePath } = temporaryRepository();
 		const cached = snapshot(root, "2026-07-26T10:00:00.000Z");
 		await seedCache(root, databasePath, "fingerprint-old", cached);
@@ -206,14 +220,14 @@ describe("AtlasIndexSession", () => {
 		session.start();
 		await session.waitUntilIdle();
 
-		expect(session.getSnapshot()).toEqual(cached);
+		expect(session.getSnapshot()).toBeUndefined();
 		expect(session.getStatus()).toEqual({
 			status: "error",
 			phase: "error",
-			hasSnapshot: true,
-			revision: 1,
-			source: "cache",
+			hasSnapshot: false,
+			revision: 0,
 			refreshing: false,
+			persistent: true,
 			error: "index failed",
 		});
 	});
@@ -240,6 +254,7 @@ describe("AtlasIndexSession", () => {
 			hasSnapshot: false,
 			revision: 0,
 			refreshing: false,
+			persistent: true,
 			error: "fingerprint failed",
 		});
 	});
@@ -299,7 +314,10 @@ describe("AtlasIndexSession", () => {
 
 		await session.dispose();
 		const cache = await openAtlasSnapshotCache({ rootPath: root, indexPath: databasePath });
-		expect(cache.getLatest(ATLAS_SNAPSHOT_VERSION, isAtlasSnapshot))
+			expect(cache.get({
+				repositoryFingerprint: "fingerprint-b",
+				snapshotVersion: ATLAS_SNAPSHOT_VERSION,
+			}, isAtlasSnapshot))
 			.toMatchObject({
 				snapshot: stable,
 				repositoryFingerprint: "fingerprint-b",

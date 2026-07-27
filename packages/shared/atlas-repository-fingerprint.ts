@@ -1,6 +1,7 @@
 import { execFile } from "node:child_process";
 import { createHash } from "node:crypto";
-import { lstat, open, readdir, readFile, realpath } from "node:fs/promises";
+import { createReadStream } from "node:fs";
+import { lstat, readdir, realpath } from "node:fs/promises";
 import { join, relative, resolve, sep } from "node:path";
 import { promisify } from "node:util";
 import { createAtlasRepositoryFingerprint } from "./atlas-snapshot-cache";
@@ -11,7 +12,6 @@ const DEFAULT_MAX_FILES = 20_000;
 const DEFAULT_MAX_FILE_BYTES = 2 * 1024 * 1024;
 const DEFAULT_MAX_TOTAL_BYTES = 128 * 1024 * 1024;
 const MAX_GIT_OUTPUT_BYTES = 32 * 1024 * 1024;
-const FINGERPRINT_SAMPLE_BYTES = 8 * 1024;
 
 const EXCLUDED_DIRECTORIES = new Set([
 	".cache",
@@ -142,31 +142,12 @@ async function filesystemRepositoryCandidates(
 	return results.sort();
 }
 
-async function sampleFileFingerprint(
-	absolutePath: string,
-	fileBytes: number,
-): Promise<string> {
-	const handle = await open(absolutePath, "r");
-	try {
-		const firstLength = Math.min(fileBytes, FINGERPRINT_SAMPLE_BYTES);
-		const lastLength = Math.min(
-			Math.max(0, fileBytes - firstLength),
-			FINGERPRINT_SAMPLE_BYTES,
-		);
-		const first = Buffer.alloc(firstLength);
-		const last = Buffer.alloc(lastLength);
-		if (firstLength > 0) await handle.read(first, 0, firstLength, 0);
-		if (lastLength > 0) {
-			await handle.read(last, 0, lastLength, fileBytes - lastLength);
-		}
-		return createHash("sha256")
-			.update(`sample:${fileBytes}:`)
-			.update(first)
-			.update(last)
-			.digest("hex");
-	} finally {
-		await handle.close();
+async function fileFingerprint(absolutePath: string): Promise<string> {
+	const hash = createHash("sha256");
+	for await (const chunk of createReadStream(absolutePath)) {
+		hash.update(chunk as Buffer);
 	}
+	return hash.digest("hex");
 }
 
 /**
@@ -191,7 +172,6 @@ export async function collectAtlasRepositoryFingerprint(
 		contentFingerprint: `${maxFiles}:${maxFileBytes}:${maxTotalBytes}`,
 	}];
 	let bytes = 0;
-	let fullyHashedBytes = 0;
 	let files = 0;
 	let truncated = discovered.length > maxFiles;
 
@@ -208,22 +188,16 @@ export async function collectAtlasRepositoryFingerprint(
 			!fileStats.isFile()
 		) continue;
 
-		const hashEntireFile =
-			fileStats.size <= maxFileBytes &&
-			fullyHashedBytes + fileStats.size <= maxTotalBytes;
 		let contentFingerprint: string;
 		try {
-			if (hashEntireFile) {
-				const content = await readFile(absolutePath);
-				fullyHashedBytes += content.length;
-				contentFingerprint = createHash("sha256").update(content).digest("hex");
-			} else {
-				truncated = true;
-				contentFingerprint = await sampleFileFingerprint(absolutePath, fileStats.size);
-			}
+			contentFingerprint = await fileFingerprint(absolutePath);
 		} catch {
 			continue;
 		}
+		if (
+			fileStats.size > maxFileBytes ||
+			bytes + fileStats.size > maxTotalBytes
+		) truncated = true;
 		bytes += fileStats.size;
 		files += 1;
 		fingerprintEntries.push({

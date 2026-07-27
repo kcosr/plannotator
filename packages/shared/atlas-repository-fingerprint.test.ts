@@ -107,7 +107,7 @@ describe("collectAtlasRepositoryFingerprint", () => {
 		expect(oneFile.fingerprint).not.toBe(twoFiles.fingerprint);
 	});
 
-	test("tracks oversized files with a bounded content sample", async () => {
+	test("streams complete oversized files into the fingerprint", async () => {
 		const root = repository();
 		writeFileSync(join(root, "large.txt"), "prefix\nmiddle\nsuffix\n");
 
@@ -117,7 +117,26 @@ describe("collectAtlasRepositoryFingerprint", () => {
 		expect(initial.truncated).toBe(true);
 
 		writeFileSync(join(root, "large.txt"), "prefix\nchanged\nsuffix\n");
-		const changed = await collectAtlasRepositoryFingerprint(root, { maxFileBytes: 4 });
+			const changed = await collectAtlasRepositoryFingerprint(root, { maxFileBytes: 4 });
+			expect(changed.fingerprint).not.toBe(initial.fingerprint);
+		});
+
+	test("detects same-size middle-only changes beyond the old edge sample", async () => {
+		const root = repository();
+		const filePath = join(root, "large.txt");
+		const prefix = "p".repeat(12 * 1024);
+		const suffix = "s".repeat(12 * 1024);
+		writeFileSync(filePath, `${prefix}middle-a${suffix}`);
+		const initial = await collectAtlasRepositoryFingerprint(root, {
+			maxFileBytes: 1024,
+			maxTotalBytes: 1024,
+		});
+
+		writeFileSync(filePath, `${prefix}middle-b${suffix}`);
+		const changed = await collectAtlasRepositoryFingerprint(root, {
+			maxFileBytes: 1024,
+			maxTotalBytes: 1024,
+		});
 		expect(changed.fingerprint).not.toBe(initial.fingerprint);
 	});
 });

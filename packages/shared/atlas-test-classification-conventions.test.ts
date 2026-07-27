@@ -90,6 +90,20 @@ describe("conventional Atlas test classification", () => {
 			),
 		).toEqual([expect.objectContaining({ reason: "java-test-file" })]);
 
+		for (const path of [
+			"src/main/java/example/Latest.java",
+			"src/main/java/example/Contest.java",
+		]) {
+			expect(
+				classifyConventionalTestRanges(
+					"java",
+					path,
+					"class Production {}\n",
+					undefined,
+				),
+			).toEqual([]);
+		}
+
 		expect(
 			classifyConventionalTestRanges(
 				"java",

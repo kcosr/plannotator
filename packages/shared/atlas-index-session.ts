@@ -1,5 +1,5 @@
 import { realpath } from "node:fs/promises";
-import { resolve } from "node:path";
+import { basename, resolve } from "node:path";
 import {
 	ATLAS_SNAPSHOT_VERSION,
 	type AtlasSnapshot,
@@ -23,6 +23,8 @@ export interface AtlasIndexSessionStatus {
 	revision: number;
 	source?: "cache" | "fresh";
 	refreshing: boolean;
+	persistent: boolean;
+	persistenceError?: string;
 	error?: string;
 }
 
@@ -93,21 +95,16 @@ export class AtlasIndexSession {
 					options.fingerprintOptions,
 				)).fingerprint);
 
-		const cached = cache.getLatest(
-			ATLAS_SNAPSHOT_VERSION,
-			isAtlasSnapshot,
-		);
-		if (cached) {
-			this.#snapshot = cached.snapshot;
-			this.#snapshotFingerprint = cached.repositoryFingerprint;
-		}
 		this.#status = {
 			status: "indexing",
 			phase: "checking",
-			hasSnapshot: Boolean(this.#snapshot),
-			revision: this.#snapshot ? 1 : 0,
-			...(this.#snapshot && { source: "cache" as const }),
+			hasSnapshot: false,
+			revision: 0,
 			refreshing: false,
+			persistent: cache.available,
+			...(cache.initializationError && {
+				persistenceError: cache.initializationError,
+			}),
 		};
 	}
 
@@ -204,10 +201,40 @@ export class AtlasIndexSession {
 			revision: this.#status.revision,
 			...(this.#status.source && { source: this.#status.source }),
 			refreshing: true,
+			persistent: this.#status.persistent,
+			...(this.#status.persistenceError && {
+				persistenceError: this.#status.persistenceError,
+			}),
 		};
 		try {
 			let repositoryFingerprint = await this.#collectFingerprint(this.rootPath);
 			if (this.#disposed) return;
+			if (!force && !this.#snapshot) {
+				const cached = this.#cache.get({
+					repositoryFingerprint,
+					snapshotVersion: ATLAS_SNAPSHOT_VERSION,
+				}, isAtlasSnapshot);
+				if (cached) {
+					this.#snapshot = bindSnapshotToRepository(
+						cached.snapshot,
+						this.rootPath,
+					);
+					this.#snapshotFingerprint = repositoryFingerprint;
+					this.#status = {
+						status: "ready",
+						phase: "ready",
+						hasSnapshot: true,
+						revision: this.#status.revision + 1,
+						source: "cache",
+						refreshing: false,
+						persistent: this.#cache.available,
+						...(this.#cache.lastError && {
+							persistenceError: this.#cache.lastError,
+						}),
+					};
+					return;
+				}
+			}
 			if (
 				!force &&
 				this.#snapshot &&
@@ -220,6 +247,10 @@ export class AtlasIndexSession {
 					revision: this.#status.revision,
 					source: this.#status.source ?? "cache",
 					refreshing: false,
+					persistent: this.#status.persistent,
+					...(this.#status.persistenceError && {
+						persistenceError: this.#status.persistenceError,
+					}),
 				};
 				return;
 			}
@@ -231,6 +262,10 @@ export class AtlasIndexSession {
 				revision: this.#status.revision,
 				...(this.#status.source && { source: this.#status.source }),
 				refreshing: true,
+				persistent: this.#status.persistent,
+				...(this.#status.persistenceError && {
+					persistenceError: this.#status.persistenceError,
+				}),
 			};
 			let nextSnapshot: AtlasSnapshot | undefined;
 			for (let attempt = 1; attempt <= MAX_STABILITY_ATTEMPTS; attempt += 1) {
@@ -255,7 +290,7 @@ export class AtlasIndexSession {
 				throw new Error("Atlas snapshot builder returned an invalid snapshot");
 			}
 
-			this.#cache.set({
+			const persistent = this.#cache.set({
 				repositoryFingerprint,
 				snapshotVersion: ATLAS_SNAPSHOT_VERSION,
 			}, nextSnapshot);
@@ -268,6 +303,11 @@ export class AtlasIndexSession {
 				revision: this.#status.revision + 1,
 				source: "fresh",
 				refreshing: false,
+				persistent,
+				...(!persistent && {
+					persistenceError: this.#cache.lastError ??
+						"Atlas snapshot could not be persisted",
+				}),
 			};
 		} catch (error) {
 			if (this.#disposed) return;
@@ -278,8 +318,27 @@ export class AtlasIndexSession {
 				revision: this.#status.revision,
 				...(this.#status.source && { source: this.#status.source }),
 				refreshing: false,
+				persistent: this.#status.persistent,
+				...(this.#status.persistenceError && {
+					persistenceError: this.#status.persistenceError,
+				}),
 				error: error instanceof Error ? error.message : String(error),
 			};
 		}
 	}
+}
+
+function bindSnapshotToRepository(
+	snapshot: AtlasSnapshot,
+	rootPath: string,
+): AtlasSnapshot {
+	const rootName = basename(rootPath);
+	return {
+		...snapshot,
+		rootName,
+		nodes: snapshot.nodes.map((node) =>
+			node.id === snapshot.rootId
+				? { ...node, name: rootName }
+				: node),
+	};
 }

@@ -187,11 +187,19 @@ export async function readAtlasSource(
 	if (fileStats.size > maxBytes) throw new Error("Atlas source file is too large");
 	const bytes = await readFile(resolved);
 	if (bytes.includes(0)) throw new Error("Atlas source file is binary");
+	const content = bytes.toString("utf8");
+	const extension = extname(resolved).toLowerCase();
 	return {
 		path: validateAtlasRelativePath(filePath),
-		content: bytes.toString("utf8"),
+		content,
 		bytes: bytes.length,
-		language: SOURCE_LANGUAGES[extname(resolved).toLowerCase()] ?? "text",
+		language: extension === ".h" && (
+			/\b(?:namespace|template\s*<|constexpr|consteval|constinit|noexcept|std::)\b/.test(content) ||
+			/\b(?:class|typename)\s+[A-Za-z_]\w*/.test(content) ||
+			/\busing\s+[A-Za-z_]\w*\s*=/.test(content)
+		)
+			? "cpp"
+			: SOURCE_LANGUAGES[extension] ?? "text",
 	};
 }
 

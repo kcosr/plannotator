@@ -292,19 +292,77 @@ function inlineTestRanges(
 	bindings: Map<string, Binding>,
 ): JavaScriptTestRange[] {
 	const ranges: JavaScriptTestRange[] = [];
-	for (const [index, line] of content.split(/\r\n|\r|\n/).entries()) {
-		const match = line.match(
-			/^\s*(?:await\s+)?([A-Za-z_$][\w$]*(?:(?:\?\.|\.)[A-Za-z_$][\w$]*)*)\s*(?:\([^{};]*\)\s*)?\(/,
-		);
-		if (!match || !semanticCallee(match[1]!, bindings)) continue;
+	for (const match of content.matchAll(
+		/^\s*(?:await\s+)?([A-Za-z_$][\w$]*(?:(?:\?\.|\.)[A-Za-z_$][\w$]*)*)\s*(?:\([^{}\n;]*\)\s*)?\(/gm,
+	)) {
+		if (!semanticCallee(match[1]!, bindings)) continue;
+		const startOffset = match.index;
+		const openingOffset = startOffset + match[0].lastIndexOf("(");
 		ranges.push({
-			startLine: index + 1,
-			endLine: index + 1,
+			startLine: lineAtOffset(content, startOffset),
+			endLine: lineAtOffset(content, matchingCallEnd(content, openingOffset)),
 			reason: "js-test-call",
 			confidence: "semantic",
 		});
 	}
 	return ranges;
+}
+
+function lineAtOffset(content: string, offset: number): number {
+	let line = 1;
+	for (let index = 0; index < Math.min(offset, content.length); index += 1) {
+		if (content[index] === "\n") line += 1;
+	}
+	return line;
+}
+
+function matchingCallEnd(content: string, openingOffset: number): number {
+	let depth = 0;
+	let quote: "'" | '"' | "`" | null = null;
+	let lineComment = false;
+	let blockComment = false;
+	for (let index = openingOffset; index < content.length; index += 1) {
+		const character = content[index]!;
+		const next = content[index + 1];
+		if (lineComment) {
+			if (character === "\n") lineComment = false;
+			continue;
+		}
+		if (blockComment) {
+			if (character === "*" && next === "/") {
+				blockComment = false;
+				index += 1;
+			}
+			continue;
+		}
+		if (quote) {
+			if (character === "\\") {
+				index += 1;
+				continue;
+			}
+			if (character === quote) quote = null;
+			continue;
+		}
+		if (character === "/" && next === "/") {
+			lineComment = true;
+			index += 1;
+			continue;
+		}
+		if (character === "/" && next === "*") {
+			blockComment = true;
+			index += 1;
+			continue;
+		}
+		if (character === "'" || character === '"' || character === "`") {
+			quote = character;
+			continue;
+		}
+		if (character === "(") depth += 1;
+		if (character !== ")") continue;
+		depth -= 1;
+		if (depth === 0) return index;
+	}
+	return openingOffset;
 }
 
 /**

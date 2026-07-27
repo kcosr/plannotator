@@ -155,6 +155,8 @@
 
 .review-atlas-host__index svg { color: #22c55e; }
 .review-atlas-host__index.is-working svg { color: var(--primary); }
+.review-atlas-host__index.is-error { color: var(--destructive); }
+.review-atlas-host__index.is-error svg { color: var(--destructive); }
 
 .review-atlas-host__workspace {
   min-width: 0;
@@ -269,6 +271,16 @@
   background: color-mix(in oklab, var(--primary) 14%, var(--background));
   box-shadow: inset 2px 0 var(--primary);
   color: var(--foreground);
+}
+
+.review-atlas-hotspot-list > button.review-atlas-hotspot-more {
+  min-height: 30px;
+  display: block;
+  margin-top: 3px;
+  border-top: 1px solid var(--border);
+  color: var(--primary);
+  text-align: center;
+  font-size: 10px;
 }
 
 .review-atlas-hotspot-rank {

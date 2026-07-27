@@ -266,6 +266,94 @@ describe("AtlasSemanticIndexService", () => {
 		await second.dispose();
 	});
 
+	test("reuses declaration reference results from indexed use-site coordinates", async () => {
+		const data = fixture();
+		const session = new FakeSession();
+		const service = await AtlasSemanticIndexService.open({
+			...data,
+			session: asSession(session),
+			capabilities: capabilities(),
+		});
+		const generation = {
+			snapshot: data.snapshot,
+			repositoryFingerprint: "sha256:reference-alias",
+			symbol: "run",
+		};
+		expect((await service.resolveReferences({
+			...generation,
+			filePath: "src/main.ts",
+			line: 1,
+			column: 17,
+		})).source).toBe("live");
+		expect((await service.resolveReferences({
+			...generation,
+			filePath: "src/main.ts",
+			line: 2,
+			column: 10,
+		})).source).toBe("cache");
+		expect(session.locationCalls).toBe(1);
+		await service.dispose();
+	});
+
+	test("reuses indexed call hierarchy from a returned call-site coordinate", async () => {
+		const data = fixture();
+		const session = new FakeSession();
+		session.hierarchy = {
+			...session.hierarchy,
+			incoming: [{
+				item: {
+					name: "caller",
+					kind: 12,
+					location: {
+						filePath: "src/main.ts",
+						range: {
+							start: { line: 1, column: 1 },
+							end: { line: 3, column: 2 },
+						},
+						external: false,
+					},
+					selectionRange: {
+						start: { line: 1, column: 17 },
+						end: { line: 1, column: 20 },
+					},
+				},
+				fromRanges: [{
+					start: { line: 2, column: 10 },
+					end: { line: 2, column: 13 },
+				}],
+			}],
+		};
+		const service = await AtlasSemanticIndexService.open({
+			...data,
+			session: asSession(session),
+			capabilities: capabilities(),
+		});
+		const generation = {
+			snapshot: data.snapshot,
+			repositoryFingerprint: "sha256:call-alias",
+		};
+		const live = await service.resolveCalls({
+			...generation,
+			filePath: "src/main.ts",
+			line: 1,
+			column: 17,
+		});
+		expect(live.source).toBe("live");
+		expect(live.response.callers[0]?.callSites).toEqual([expect.objectContaining({
+			filePath: "src/main.ts",
+			line: 2,
+			column: 10,
+		})]);
+		expect((await service.resolveCalls({
+			...generation,
+			filePath: "src/main.ts",
+			line: 2,
+			column: 10,
+		})).source).toBe("cache");
+		expect(session.callHierarchyCalls).toBe(1);
+		await service.dispose();
+	});
+
 	test("persists valid empty results", async () => {
 		const data = fixture();
 		const session = new FakeSession();

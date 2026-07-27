@@ -62,6 +62,28 @@ afterEach(async () => {
 });
 
 describe("buildAtlasSnapshot", () => {
+	test("classifies C++ .h headers from syntax and matching translation units", async () => {
+		const root = await mkdtemp(join(tmpdir(), "plannotator-atlas-cpp-"));
+		fixtures.push(root);
+		await mkdir(join(root, "include"), { recursive: true });
+		await writeFile(
+			join(root, "include", "widget.h"),
+			"namespace example { template <typename T> class Widget {}; }\n",
+		);
+		await writeFile(join(root, "include", "plain.h"), "int plain_value(void);\n");
+		await writeFile(join(root, "include", "paired.h"), "int paired_value();\n");
+		await writeFile(join(root, "include", "paired.cpp"), '#include "paired.h"\n');
+
+		const snapshot = await buildAtlasSnapshot(root);
+		expect(snapshot.nodes.find((node) => node.path === "include/widget.h")?.language)
+			.toBe("cpp");
+		expect(snapshot.nodes.find((node) => node.path === "include/paired.h")?.language)
+			.toBe("cpp");
+		expect(snapshot.nodes.find((node) => node.path === "include/plain.h")?.language)
+			.toBe("c");
+		expect((await readAtlasSource(root, "include/widget.h")).language).toBe("cpp");
+	});
+
 	test("builds stable nested nodes, metrics, symbols, and dependencies", async () => {
 		const root = await fixture();
 		const snapshot = await buildAtlasSnapshot(root);

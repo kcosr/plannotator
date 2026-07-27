@@ -37,9 +37,12 @@ describe("exportReviewFeedback", () => {
       lineStart: 14,
       lineEnd: 16,
       atlasSnapshotGeneratedAt: "2026-07-26T12:00:00.000Z",
+      originalCode: "const value = run();",
     })]);
     expect(result).toContain("Source lines 14-16");
     expect(result).toContain("Codebase snapshot: 2026-07-26T12:00:00.000Z");
+    expect(result).toContain("**Selected source:**");
+    expect(result).toContain("const value = run();");
     expect(result).not.toContain("Lines 14-16 (new)");
   });
 

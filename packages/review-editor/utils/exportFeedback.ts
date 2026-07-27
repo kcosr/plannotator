@@ -148,6 +148,9 @@ function formatFileAnnotations(fileAnnotations: CodeAnnotation[], headingLevel =
         output += `_Codebase snapshot: ${ann.atlasSnapshotGeneratedAt}_\n`;
       }
       if (ann.text) output += `${prefix}${ann.text}\n`;
+      if (ann.originalCode) {
+        output += `\n**Selected source:**\n\`\`\`\n${ann.originalCode}\n\`\`\`\n`;
+      }
       if (ann.reasoning) output += `\n**Reasoning:** ${ann.reasoning}\n`;
       output += '\n';
       continue;

@@ -94,7 +94,10 @@ function buildFileScopedBody(annotations: CodeAnnotation[]): string {
       const location = a.lineStart === a.lineEnd
         ? `${a.filePath}:${a.lineStart}`
         : `${a.filePath}:${a.lineStart}-${a.lineEnd}`;
-      parts.push(`**${location} (codebase source):** ${a.text}`);
+      const selectedSource = a.originalCode
+        ? `\n\n**Selected source:**\n\`\`\`\n${a.originalCode}\n\`\`\``
+        : '';
+      parts.push(`**${location} (codebase source):** ${a.text}${selectedSource}`);
     } else if (scope === 'file' && a.text) parts.push(`**${a.filePath}:** ${a.text}`);
     else if (scope === 'general' && a.text) parts.push(a.text);
   }

@@ -3,9 +3,11 @@ import {
   blockMapChangeColor,
   blockMapChangedLines,
   blockMapOverlayMaximum,
+  blockMapQueryMatches,
   resolveBlockMapNodeOverlay,
   type BlockMapOverlay,
 } from './BlockMap';
+import type { AtlasNode } from './types';
 
 describe('BlockMap overlays', () => {
   test('keeps the standalone path empty when no overlay is provided', () => {
@@ -73,5 +75,46 @@ describe('BlockMap overlays', () => {
     expect(blockMapChangeColor({ additions: 8, deletions: 3 })).toBe('#22c55e');
     expect(blockMapChangeColor({ additions: 2, deletions: 7 })).toBe('#ef4444');
     expect(blockMapChangeColor({ additions: 5, deletions: 5 })).toBe('#eab308');
+  });
+
+  test('keeps ancestors visible when a deep descendant matches search', () => {
+    const node = (
+      id: string,
+      path: string,
+      parentId: string | null,
+      childIds: string[],
+      kind: AtlasNode['kind'],
+    ): AtlasNode => ({
+      id,
+      path,
+      name: path.split('/').at(-1) || 'root',
+      parentId,
+      childIds,
+      kind,
+      depth: path ? path.split('/').length : 0,
+      language: null,
+      extension: null,
+      bytes: 1,
+      lines: 1,
+      complexity: 0,
+      testBytes: 0,
+      testLines: 0,
+      testComplexity: 0,
+      testRanges: [],
+      symbols: [],
+    });
+    const nodes = [
+      node('root', '', null, ['src'], 'root'),
+      node('src', 'src', 'root', ['feature'], 'directory'),
+      node('feature', 'src/feature', 'src', ['target'], 'directory'),
+      node('target', 'src/feature/target.ts', 'feature', [], 'file'),
+    ];
+
+    expect([...blockMapQueryMatches(nodes, 'target.ts')]).toEqual([
+      'target',
+      'feature',
+      'src',
+      'root',
+    ]);
   });
 });

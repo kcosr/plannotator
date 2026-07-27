@@ -208,7 +208,7 @@ describe("explore server", () => {
       await expect(server.waitForFeedback()).resolves.toBeNull();
       expect(closed).toBe(true);
     } finally {
-      server.stop();
+      await server.stop();
     }
   });
 
@@ -225,14 +225,14 @@ describe("explore server", () => {
     const closePromise = server.waitForClose().then(() => {
       closed = true;
     });
-    server.stop();
+    await server.stop();
     await closePromise;
 
     expect(closed).toBe(true);
     await expect(server.waitForFeedback()).resolves.toBeNull();
   });
 
-  test("manual indexing writes a snapshot that a server hydrates immediately", async () => {
+  test("manual indexing writes a snapshot that a server hydrates after verification", async () => {
     const root = environment.makeTempDir();
     const indexPath = join(environment.makeTempDir(), "atlas.sqlite3");
     writeFileSync(join(root, "index.ts"), "export const cached = true;\n");
@@ -250,6 +250,7 @@ describe("explore server", () => {
       indexPath,
     });
     try {
+      await waitForReady(server.url);
       const status = await fetch(`${server.url}/api/atlas/status`).then(
         (response) => response.json() as Promise<{
           hasSnapshot: boolean;
@@ -266,8 +267,18 @@ describe("explore server", () => {
 
       await fetch(`${server.url}/api/atlas/close`, { method: "POST" });
     } finally {
-      server.stop();
+      await server.stop();
     }
+  });
+
+  test("manual indexing fails when the requested cache cannot be persisted", async () => {
+    const root = environment.makeTempDir();
+    writeFileSync(join(root, "index.ts"), "export const cached = true;\n");
+
+    await expect(indexAtlasRepository({
+      rootPath: root,
+      indexPath: environment.makeTempDir(),
+    })).rejects.toThrow(/persist|database|directory/i);
   });
 
   test("validates and returns submitted Atlas feedback", async () => {
@@ -340,6 +351,6 @@ describe("explore server", () => {
       body: JSON.stringify(feedback),
     });
     expect(duplicate.status).toBe(409);
-    server.stop();
+    await server.stop();
   });
 });

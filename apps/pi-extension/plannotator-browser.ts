@@ -68,14 +68,14 @@ export interface PlanReviewDecision {
 export interface BrowserDecisionSession<T> {
 	url: string;
 	waitForDecision: () => Promise<T>;
-	stop: () => void;
+	stop: () => void | Promise<void>;
 }
 
 export interface BrowserExploreSession {
 	url: string;
 	waitForClose: () => Promise<void>;
 	waitForFeedback: () => Promise<AtlasFeedbackResult | null>;
-	stop: () => void;
+	stop: () => Promise<void>;
 }
 
 type CodeReviewOptions = {
@@ -142,7 +142,7 @@ async function buildLocalWorkspaceReview(
 }
 
 async function openBrowserAndWait<T>(
-	server: { url: string; stop: () => void },
+	server: { url: string; stop: () => void | Promise<void> },
 	ctx: ExtensionContext,
 	waitForResult: () => Promise<T>,
 ): Promise<T> {
@@ -151,7 +151,7 @@ async function openBrowserAndWait<T>(
 }
 
 async function waitForDecisionWithCleanup<T>(
-	server: { url: string; stop: () => void },
+	server: { url: string; stop: () => void | Promise<void> },
 	waitForResult: () => Promise<T>,
 ): Promise<T> {
 	try {
@@ -159,12 +159,12 @@ async function waitForDecisionWithCleanup<T>(
 		await delay(1500);
 		return result;
 	} finally {
-		server.stop();
+		await server.stop();
 	}
 }
 
 function startBrowserDecisionSession<T>(
-	server: { url: string; stop: () => void },
+	server: { url: string; stop: () => void | Promise<void> },
 	ctx: ExtensionContext,
 	waitForResult: () => Promise<T>,
 ): BrowserDecisionSession<T> {
@@ -176,7 +176,7 @@ function startBrowserDecisionSession<T>(
 	const stop = () => {
 		if (stopped) return;
 		stopped = true;
-		server.stop();
+		void server.stop();
 		stopReject?.(createStoppedError());
 		stopReject = undefined;
 	};
@@ -265,7 +265,7 @@ export async function startCodebaseExploreBrowserSession(
 	try {
 		await openBrowserForServer(server.url, ctx);
 	} catch (error) {
-		server.stop();
+		await server.stop();
 		throw error;
 	}
 
