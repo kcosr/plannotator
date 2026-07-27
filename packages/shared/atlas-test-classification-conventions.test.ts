@@ -11,6 +11,7 @@ function item(
 		signature?: string;
 		astKind?: string;
 		isImport?: boolean;
+		members?: StructuralItem["members"];
 	} = {},
 ): StructuralItem {
 	return {
@@ -25,6 +26,7 @@ function item(
 		astKind: options.astKind ?? "function",
 		isImport: options.isImport ?? false,
 		isExported: false,
+		...(options.members && { members: options.members }),
 	};
 }
 
@@ -121,8 +123,11 @@ describe("conventional Atlas test classification", () => {
 			"    pass",
 			"def test_inline():",
 			"    assert True",
-			"class Service:",
+			"class TestConfig(Config):",
 			"    def test_connection(self):",
+			"        return True",
+			"class TestService:",
+			"    def test_request(self):",
 			"        return True",
 		].join("\n");
 		expect(classifyConventionalTestRanges(
@@ -137,16 +142,38 @@ describe("conventional Atlas test classification", () => {
 				}),
 				item("live", 2, 3),
 				item("test_inline", 4, 5),
-				item("Service", 6, 8, "class", {
-					signature: "class Service:",
+				item("TestConfig", 6, 8, "class", {
+					signature: "class TestConfig(Config):",
 					astKind: "class_definition",
 				}),
+				item("TestService", 9, 11, "class", {
+					signature: "class TestService:",
+					astKind: "class_definition",
+					members: [{
+						role: "member",
+						symbolType: "method",
+						name: "test_request",
+						range: {
+							start: { line: 9, column: 4 },
+							end: { line: 10, column: 19 },
+						},
+						signature: "def test_request(self):",
+						astKind: "function_definition",
+					}],
+				}),
 			]),
-		)).toEqual([expect.objectContaining({
-			startLine: 4,
-			endLine: 5,
-			reason: "python-test-symbol",
-		})]);
+		)).toEqual([
+			expect.objectContaining({
+				startLine: 4,
+				endLine: 5,
+				reason: "python-test-symbol",
+			}),
+			expect.objectContaining({
+				startLine: 9,
+				endLine: 11,
+				reason: "python-test-symbol",
+			}),
+		]);
 	});
 
 	test("classifies Ruby test-case subclasses but not unrelated methods", () => {

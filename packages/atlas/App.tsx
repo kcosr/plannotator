@@ -214,7 +214,7 @@ function useAtlasData() {
   const recordError = useCallback((reason: unknown) => {
     const message = reason instanceof Error ? reason.message : String(reason);
     setError(message);
-    setIndexStatus((current) => atlasIndexFailure(current, message).status);
+    setIndexStatus((current) => atlasIndexFailure(current, reason).status);
   }, []);
 
   const load = useCallback(async (signal?: AbortSignal) => {

@@ -63,6 +63,7 @@ export interface AtlasRepositoryFingerprint {
 interface CachedContentFingerprint {
 	signature: string;
 	fingerprint: string;
+	cachedAtMs: number;
 }
 
 export interface AtlasRepositoryFingerprintCacheStats {
@@ -70,6 +71,8 @@ export interface AtlasRepositoryFingerprintCacheStats {
 	hits: number;
 	misses: number;
 }
+
+const RACY_FINGERPRINT_WINDOW_MS = 2_000;
 
 /**
  * Reuses file-content hashes while stable identity metadata is unchanged.
@@ -82,16 +85,34 @@ export class AtlasRepositoryFingerprintCache {
 	#entries = new Map<string, CachedContentFingerprint>();
 	#hits = 0;
 	#misses = 0;
+	#now: () => number;
 
-	get(cacheKey: string, signature: string): string | undefined {
+	constructor(now: () => number = Date.now) {
+		this.#now = now;
+	}
+
+	get(
+		cacheKey: string,
+		signature: string,
+		latestChangeMs: number,
+	): string | undefined {
 		const entry = this.#entries.get(cacheKey);
 		if (!entry || entry.signature !== signature) return undefined;
+		// Coarse filesystems can report an unchanged stat within the write tick.
+		if (
+			latestChangeMs >=
+			entry.cachedAtMs - RACY_FINGERPRINT_WINDOW_MS
+		) return undefined;
 		this.#hits += 1;
 		return entry.fingerprint;
 	}
 
 	set(cacheKey: string, signature: string, fingerprint: string): void {
-		this.#entries.set(cacheKey, { signature, fingerprint });
+		this.#entries.set(cacheKey, {
+			signature,
+			fingerprint,
+			cachedAtMs: this.#now(),
+		});
 		this.#misses += 1;
 	}
 
@@ -226,6 +247,13 @@ function fileSignature(stats: BigIntStats): string {
 	].join(":");
 }
 
+function latestFileChangeMs(stats: BigIntStats): number {
+	return Number(
+		(stats.mtimeNs > stats.ctimeNs ? stats.mtimeNs : stats.ctimeNs) /
+		1_000_000n,
+	);
+}
+
 async function stableFileFingerprint(
 	absolutePath: string,
 	contentCache: AtlasRepositoryFingerprintCache | undefined,
@@ -242,7 +270,11 @@ async function stableFileFingerprint(
 		}
 		if (before.isSymbolicLink() || !before.isFile()) return null;
 		const signature = fileSignature(before);
-		const cached = contentCache?.get(absolutePath, signature);
+		const cached = contentCache?.get(
+			absolutePath,
+			signature,
+			latestFileChangeMs(before),
+		);
 		if (cached) {
 			return { bytes: Number(before.size), fingerprint: cached };
 		}

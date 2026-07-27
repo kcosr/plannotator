@@ -108,6 +108,14 @@ function pythonTestCaseClass(item: StructuralItem): boolean {
 	);
 }
 
+function pytestTestClass(item: StructuralItem): boolean {
+	return (
+		item.symbolType === "class" &&
+		/^Test[A-Z_]/.test(item.name) &&
+		(item.members ?? []).some((member) => /^test_/.test(member.name))
+	);
+}
+
 function rubyTestCaseClass(item: StructuralItem): boolean {
 	if (item.symbolType !== "class") return false;
 	return /<\s*(?:(?:[A-Za-z_]\w*::)*(?:[A-Za-z_]\w*)?TestCase|Minitest::Test|ActionDispatch::IntegrationTest)\b/.test(
@@ -182,8 +190,7 @@ export function classifyConventionalTestRanges(
 				pythonTestCaseClass(item) ||
 				(
 					pytestImported &&
-					item.symbolType === "class" &&
-					/^Test[A-Z_]/.test(item.name)
+					pytestTestClass(item)
 				) ||
 				(
 					item.symbolType === "function" &&

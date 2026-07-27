@@ -150,7 +150,9 @@ describe("collectAtlasRepositoryFingerprint", () => {
 		const firstPath = join(root, "a.ts");
 		writeFileSync(firstPath, "export const a = 1;\n");
 		writeFileSync(join(root, "b.ts"), "export const b = 1;\n");
-		const cache = new AtlasRepositoryFingerprintCache();
+		const cache = new AtlasRepositoryFingerprintCache(
+			() => Date.now() + 10_000,
+		);
 
 		const initial = await collectAtlasRepositoryFingerprint(root, {
 			contentCache: cache,
@@ -169,6 +171,15 @@ describe("collectAtlasRepositoryFingerprint", () => {
 		});
 		expect(changed.fingerprint).not.toBe(initial.fingerprint);
 		expect(cache.getStats()).toEqual({ entries: 2, hits: 3, misses: 3 });
+	});
+
+	test("rehashes cache entries whose timestamps are racy with the cache write", () => {
+		const cache = new AtlasRepositoryFingerprintCache(() => 10_000);
+		cache.set("/repository/a.ts", "same-stat", "old-hash");
+
+		expect(cache.get("/repository/a.ts", "same-stat", 9_000)).toBeUndefined();
+		expect(cache.get("/repository/a.ts", "same-stat", 7_999)).toBe("old-hash");
+		expect(cache.getStats()).toEqual({ entries: 1, hits: 1, misses: 1 });
 	});
 
 	test("streams complete oversized files into the fingerprint", async () => {

@@ -75,6 +75,14 @@ const MODIFIERS = new Set([
 ]);
 
 const PARAMETERIZED_MODIFIERS = new Set(["each", "for", "runIf", "skipIf"]);
+const CONTROL_HEAD_KEYWORDS = new Set([
+	"catch",
+	"for",
+	"if",
+	"switch",
+	"while",
+	"with",
+]);
 const REGEX_PREFIX_KEYWORDS = new Set([
 	"await",
 	"case",
@@ -368,6 +376,11 @@ function templateExpressionEnd(
 ): number | null {
 	let depth = 1;
 	let canStartRegex = true;
+	let propertyAccess = false;
+	let pendingControlParen = false;
+	let statementStart = false;
+	const controlParens: boolean[] = [];
+	const blockBraces: boolean[] = [];
 	for (let index = openingOffset + 1; index < content.length; index += 1) {
 		const character = content[index]!;
 		const next = content[index + 1];
@@ -377,6 +390,9 @@ function templateExpressionEnd(
 			if (end === null) return null;
 			index = end;
 			canStartRegex = false;
+			propertyAccess = false;
+			pendingControlParen = false;
+			statementStart = false;
 			continue;
 		}
 		if (character === "`") {
@@ -384,6 +400,9 @@ function templateExpressionEnd(
 			if (end === null) return null;
 			index = end;
 			canStartRegex = false;
+			propertyAccess = false;
+			pendingControlParen = false;
+			statementStart = false;
 			continue;
 		}
 		if (character === "/" && next === "/") {
@@ -399,28 +418,76 @@ function templateExpressionEnd(
 			if (end !== null) {
 				index = end;
 				canStartRegex = false;
+				propertyAccess = false;
+				pendingControlParen = false;
+				statementStart = false;
 				continue;
 			}
 		}
 		if (/[A-Za-z_$]/.test(character)) {
 			let end = index + 1;
 			while (/[\w$]/.test(content[end] ?? "")) end += 1;
-			canStartRegex = REGEX_PREFIX_KEYWORDS.has(content.slice(index, end));
+			const word = content.slice(index, end);
+			canStartRegex = !propertyAccess && REGEX_PREFIX_KEYWORDS.has(word);
+			pendingControlParen = !propertyAccess && CONTROL_HEAD_KEYWORDS.has(word);
+			propertyAccess = false;
+			statementStart = false;
 			index = end - 1;
 			continue;
 		}
+		if (character === ".") {
+			canStartRegex = false;
+			propertyAccess = true;
+			pendingControlParen = false;
+			statementStart = false;
+			continue;
+		}
+		if (character === "(") {
+			controlParens.push(pendingControlParen);
+			canStartRegex = true;
+			propertyAccess = false;
+			pendingControlParen = false;
+			statementStart = false;
+			continue;
+		}
+		if (character === ")") {
+			const controlHead = controlParens.pop() ?? false;
+			canStartRegex = controlHead;
+			propertyAccess = false;
+			pendingControlParen = false;
+			statementStart = controlHead;
+			continue;
+		}
 		if (character === "{") {
+			blockBraces.push(statementStart);
 			depth += 1;
 			canStartRegex = true;
+			propertyAccess = false;
+			pendingControlParen = false;
+			statementStart = true;
 			continue;
 		}
 		if (character === "}") {
 			depth -= 1;
 			if (depth === 0) return index;
-			canStartRegex = false;
+			const statementBlock = blockBraces.pop() ?? false;
+			canStartRegex = statementBlock;
+			propertyAccess = false;
+			pendingControlParen = false;
+			statementStart = statementBlock;
+			continue;
+		}
+		if (character === ";") {
+			canStartRegex = true;
+			propertyAccess = false;
+			pendingControlParen = false;
+			statementStart = true;
 			continue;
 		}
 		canStartRegex = !/[\w)\].]/.test(character);
+		propertyAccess = false;
+		pendingControlParen = false;
+		statementStart = false;
 	}
 	return null;
 }
@@ -451,6 +518,11 @@ function maskNonCode(content: string): MaskedJavaScript {
 	const masked = content.split("");
 	const templateEnds = new Map<number, number>();
 	let canStartRegex = true;
+	let propertyAccess = false;
+	let pendingControlParen = false;
+	let statementStart = true;
+	const controlParens: boolean[] = [];
+	const blockBraces: boolean[] = [];
 	for (let index = 0; index < content.length; index += 1) {
 		const character = content[index]!;
 		const next = content[index + 1];
@@ -474,6 +546,9 @@ function maskNonCode(content: string): MaskedJavaScript {
 				index = end;
 			}
 			canStartRegex = false;
+			propertyAccess = false;
+			pendingControlParen = false;
+			statementStart = false;
 			continue;
 		}
 		if (character === "`") {
@@ -484,6 +559,9 @@ function maskNonCode(content: string): MaskedJavaScript {
 				index = end;
 			}
 			canStartRegex = false;
+			propertyAccess = false;
+			pendingControlParen = false;
+			statementStart = false;
 			continue;
 		}
 		if (character === "/" && canStartRegex) {
@@ -492,13 +570,20 @@ function maskNonCode(content: string): MaskedJavaScript {
 				maskRange(masked, content, index, end);
 				index = end;
 				canStartRegex = false;
+				propertyAccess = false;
+				pendingControlParen = false;
+				statementStart = false;
 				continue;
 			}
 		}
 		if (/[A-Za-z_$]/.test(character)) {
 			let end = index + 1;
 			while (/[\w$]/.test(content[end] ?? "")) end += 1;
-			canStartRegex = REGEX_PREFIX_KEYWORDS.has(content.slice(index, end));
+			const word = content.slice(index, end);
+			canStartRegex = !propertyAccess && REGEX_PREFIX_KEYWORDS.has(word);
+			pendingControlParen = !propertyAccess && CONTROL_HEAD_KEYWORDS.has(word);
+			propertyAccess = false;
+			statementStart = false;
 			index = end - 1;
 			continue;
 		}
@@ -507,6 +592,9 @@ function maskNonCode(content: string): MaskedJavaScript {
 			while (/[\w.]/.test(content[end] ?? "")) end += 1;
 			index = end - 1;
 			canStartRegex = false;
+			propertyAccess = false;
+			pendingControlParen = false;
+			statementStart = false;
 			continue;
 		}
 		if (
@@ -515,9 +603,61 @@ function maskNonCode(content: string): MaskedJavaScript {
 		) {
 			index += 1;
 			canStartRegex = false;
+			propertyAccess = false;
+			pendingControlParen = false;
+			statementStart = false;
+			continue;
+		}
+		if (character === ".") {
+			canStartRegex = false;
+			propertyAccess = true;
+			pendingControlParen = false;
+			statementStart = false;
+			continue;
+		}
+		if (character === "(") {
+			controlParens.push(pendingControlParen);
+			canStartRegex = true;
+			propertyAccess = false;
+			pendingControlParen = false;
+			statementStart = false;
+			continue;
+		}
+		if (character === ")") {
+			const controlHead = controlParens.pop() ?? false;
+			canStartRegex = controlHead;
+			propertyAccess = false;
+			pendingControlParen = false;
+			statementStart = controlHead;
+			continue;
+		}
+		if (character === "{") {
+			blockBraces.push(statementStart);
+			canStartRegex = true;
+			propertyAccess = false;
+			pendingControlParen = false;
+			statementStart = true;
+			continue;
+		}
+		if (character === "}") {
+			const statementBlock = blockBraces.pop() ?? false;
+			canStartRegex = statementBlock;
+			propertyAccess = false;
+			pendingControlParen = false;
+			statementStart = statementBlock;
+			continue;
+		}
+		if (character === ";") {
+			canStartRegex = true;
+			propertyAccess = false;
+			pendingControlParen = false;
+			statementStart = true;
 			continue;
 		}
 		canStartRegex = !/[)\]}.]/.test(character);
+		propertyAccess = false;
+		pendingControlParen = false;
+		statementStart = false;
 	}
 	return { content: masked.join(""), templateEnds };
 }

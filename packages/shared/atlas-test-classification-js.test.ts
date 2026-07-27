@@ -175,6 +175,56 @@ describe("classifyJavaScriptTestRanges", () => {
 		]);
 	});
 
+	test("keeps keyword-named properties as division operands", () => {
+		const lines = [
+			"import { test } from 'vitest';",
+			"test('division', () => {",
+			"  const first = iterator.return / (total / 2);",
+			"  const second = cache.delete / (width / 2);",
+			"});",
+			"test('next', () => {});",
+		];
+		const fileOutline = outline("src/feature.ts", lines, [{
+			line: 1,
+			isImport: true,
+		}]);
+
+		expect(classifyJavaScriptTestRanges(
+			"src/feature.ts",
+			lines.join("\n"),
+			fileOutline,
+		)).toEqual([
+			expect.objectContaining({ startLine: 2, endLine: 5 }),
+			expect.objectContaining({ startLine: 6, endLine: 6 }),
+		]);
+	});
+
+	test("masks statement regexes after control heads and blocks", () => {
+		const lines = [
+			"import { test } from 'vitest';",
+			"test('statement regex', () => {",
+			"  if (ready) /[(]/.test(value);",
+			"  { prepare(); }",
+			"  /[)]/.test(value);",
+			"  expect(value).toBeTruthy();",
+			"});",
+			"test('next', () => {});",
+		];
+		const fileOutline = outline("src/feature.ts", lines, [{
+			line: 1,
+			isImport: true,
+		}]);
+
+		expect(classifyJavaScriptTestRanges(
+			"src/feature.ts",
+			lines.join("\n"),
+			fileOutline,
+		)).toEqual([
+			expect.objectContaining({ startLine: 2, endLine: 7 }),
+			expect.objectContaining({ startLine: 8, endLine: 8 }),
+		]);
+	});
+
 	test("ignores test-like calls inside comments and strings", () => {
 		const lines = [
 			"import { test } from 'vitest';",
