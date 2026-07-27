@@ -30,15 +30,7 @@ const LANGUAGE_COLORS: Record<string, string> = {
   unknown: '#64748b',
 };
 
-export function blockMapNodeWeight(
-  node: AtlasNode,
-  filter: CodeFilter,
-  metric: SizeMetric,
-  overlay?: BlockMapOverlay,
-): number {
-  if (overlay?.sizeByChanges) {
-    return Math.max(1, blockMapChangedLines(overlay.nodes.get(node.id)?.changes));
-  }
+function metricValue(node: AtlasNode, filter: CodeFilter, metric: SizeMetric): number {
   return Math.max(1, filteredMetric(node, filter, metric));
 }
 
@@ -110,8 +102,6 @@ export interface BlockMapOverlay {
   nodes: ReadonlyMap<string, BlockMapNodeOverlay>;
   /** Fade nodes with no overlay entry while preserving their spatial context. */
   dimUnspecified?: boolean;
-  /** Lay out blocks by changed lines instead of the selected repository metric. */
-  sizeByChanges?: boolean;
   /** Show compact additions/deletions labels when a block has enough room. */
   showMetrics?: boolean;
 }
@@ -200,7 +190,6 @@ function createBlocks(
   metric: SizeMetric,
   width: number,
   height: number,
-  overlay?: BlockMapOverlay,
   depth = 0,
   offsetX = 0,
   offsetY = 0,
@@ -212,7 +201,7 @@ function createBlocks(
     children.map((node) => ({
       item: node,
       id: node.id,
-      value: blockMapNodeWeight(node, filter, metric, overlay),
+      value: metricValue(node, filter, metric),
     })),
     width,
     height,
@@ -238,7 +227,6 @@ function createBlocks(
         metric,
         Math.max(0, rect.width - inset * 2),
         Math.max(0, rect.height - header - inset),
-        overlay,
         depth + 1,
         x + inset,
         y + header,
@@ -265,8 +253,8 @@ export const BlockMap = memo(function BlockMap({
   const { ref, width, height } = useElementSize<HTMLDivElement>();
   const byId = useMemo(() => new Map(nodes.map((node) => [node.id, node])), [nodes]);
   const blocks = useMemo(
-    () => createBlocks(root, byId, codeFilter, sizeMetric, width, height, overlay),
-    [root, byId, codeFilter, sizeMetric, width, height, overlay],
+    () => createBlocks(root, byId, codeFilter, sizeMetric, width, height),
+    [root, byId, codeFilter, sizeMetric, width, height],
   );
   const maxColorValueByDepth = useMemo(() => {
     const values = new Map<number, number>();

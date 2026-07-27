@@ -102,7 +102,6 @@ describe('buildReviewAtlasScope', () => {
       changes: { changedLines: 3, changedFiles: 1 },
     });
     expect(scope.overlay.nodes.has('other')).toBe(false);
-    expect(scope.overlay.sizeByChanges).toBe(true);
     expect(scope.hotspots).toEqual([
       expect.objectContaining({
         id: 'symbol:app:render',

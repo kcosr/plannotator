@@ -149,7 +149,6 @@ export function buildReviewAtlasScope(
     overlay: {
       nodes: overlayNodes,
       dimUnspecified: true,
-      sizeByChanges: true,
       showMetrics: true,
     },
     changedFileNodeIds: new Set(Object.values(aggregation.fileNodeIds)),

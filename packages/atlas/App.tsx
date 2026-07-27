@@ -571,34 +571,29 @@ export function AtlasWorkspace({
                 <input value={query} onChange={(event) => onQueryChange(event.target.value)} placeholder="Find a file" aria-label="Find a file" />
                 {query && <button type="button" onClick={() => onQueryChange('')} title="Clear search"><X size={13} /></button>}
               </label>
-              {mapOverlay?.sizeByChanges ? (
-                <>
-                  <div className="atlas-fixed-metric"><span>Size</span><strong>Changes</strong></div>
-                  <div className="atlas-fixed-metric"><span>Color</span><strong>Diff heat</strong></div>
-                </>
+              <SegmentedSelect
+                label="Size"
+                value={sizeMetric}
+                onChange={onSizeMetricChange}
+                options={[
+                  { value: 'lines', label: 'Lines' },
+                  { value: 'bytes', label: 'Bytes' },
+                  { value: 'complexity', label: 'Complexity' },
+                ]}
+              />
+              {mapOverlay ? (
+                <div className="atlas-fixed-metric"><span>Color</span><strong>Diff heat</strong></div>
               ) : (
-                <>
-                  <SegmentedSelect
-                    label="Size"
-                    value={sizeMetric}
-                    onChange={onSizeMetricChange}
-                    options={[
-                      { value: 'lines', label: 'Lines' },
-                      { value: 'bytes', label: 'Bytes' },
-                      { value: 'complexity', label: 'Complexity' },
-                    ]}
-                  />
-                  <SegmentedSelect
-                    label="Color"
-                    value={colorMetric}
-                    onChange={onColorMetricChange}
-                    options={[
-                      { value: 'language', label: 'Language' },
-                      { value: 'complexity', label: 'Complexity' },
-                      { value: 'size', label: 'Size' },
-                    ]}
-                  />
-                </>
+                <SegmentedSelect
+                  label="Color"
+                  value={colorMetric}
+                  onChange={onColorMetricChange}
+                  options={[
+                    { value: 'language', label: 'Language' },
+                    { value: 'complexity', label: 'Complexity' },
+                    { value: 'size', label: 'Size' },
+                  ]}
+                />
               )}
             </>
           )}
