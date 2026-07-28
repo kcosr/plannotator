@@ -112,7 +112,7 @@ function pytestTestClass(item: StructuralItem): boolean {
 	return (
 		item.symbolType === "class" &&
 		/^Test[A-Z_]/.test(item.name) &&
-		(item.members ?? []).some((member) => /^test_/.test(member.name))
+		(item.members ?? []).some((member) => /^test/.test(member.name))
 	);
 }
 

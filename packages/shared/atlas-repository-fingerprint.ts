@@ -3,6 +3,7 @@ import { createHash } from "node:crypto";
 import { createReadStream, type BigIntStats } from "node:fs";
 import { lstat, readdir, realpath } from "node:fs/promises";
 import { join, relative, resolve, sep } from "node:path";
+import { performance } from "node:perf_hooks";
 import { promisify } from "node:util";
 import { createAtlasRepositoryFingerprint } from "./atlas-snapshot-cache";
 
@@ -63,7 +64,7 @@ export interface AtlasRepositoryFingerprint {
 interface CachedContentFingerprint {
 	signature: string;
 	fingerprint: string;
-	cachedAtMs: number;
+	stabilizingSinceMs: number;
 }
 
 export interface AtlasRepositoryFingerprintCacheStats {
@@ -87,31 +88,31 @@ export class AtlasRepositoryFingerprintCache {
 	#misses = 0;
 	#now: () => number;
 
-	constructor(now: () => number = Date.now) {
+	constructor(now: () => number = () => performance.now()) {
 		this.#now = now;
 	}
 
-	get(
-		cacheKey: string,
-		signature: string,
-		latestChangeMs: number,
-	): string | undefined {
+	get(cacheKey: string, signature: string): string | undefined {
 		const entry = this.#entries.get(cacheKey);
 		if (!entry || entry.signature !== signature) return undefined;
-		// Coarse filesystems can report an unchanged stat within the write tick.
-		if (
-			latestChangeMs >=
-			entry.cachedAtMs - RACY_FINGERPRINT_WINDOW_MS
-		) return undefined;
+		// Rehash briefly while a coarse filesystem may reuse the same stat tick.
+		if (this.#now() - entry.stabilizingSinceMs < RACY_FINGERPRINT_WINDOW_MS) {
+			return undefined;
+		}
 		this.#hits += 1;
 		return entry.fingerprint;
 	}
 
 	set(cacheKey: string, signature: string, fingerprint: string): void {
+		const previous = this.#entries.get(cacheKey);
 		this.#entries.set(cacheKey, {
 			signature,
 			fingerprint,
-			cachedAtMs: this.#now(),
+			stabilizingSinceMs:
+				previous?.signature === signature &&
+					previous.fingerprint === fingerprint
+					? previous.stabilizingSinceMs
+					: this.#now(),
 		});
 		this.#misses += 1;
 	}
@@ -247,13 +248,6 @@ function fileSignature(stats: BigIntStats): string {
 	].join(":");
 }
 
-function latestFileChangeMs(stats: BigIntStats): number {
-	return Number(
-		(stats.mtimeNs > stats.ctimeNs ? stats.mtimeNs : stats.ctimeNs) /
-		1_000_000n,
-	);
-}
-
 async function stableFileFingerprint(
 	absolutePath: string,
 	contentCache: AtlasRepositoryFingerprintCache | undefined,
@@ -270,11 +264,7 @@ async function stableFileFingerprint(
 		}
 		if (before.isSymbolicLink() || !before.isFile()) return null;
 		const signature = fileSignature(before);
-		const cached = contentCache?.get(
-			absolutePath,
-			signature,
-			latestFileChangeMs(before),
-		);
+		const cached = contentCache?.get(absolutePath, signature);
 		if (cached) {
 			return { bytes: Number(before.size), fingerprint: cached };
 		}

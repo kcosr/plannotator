@@ -150,14 +150,14 @@ describe("collectAtlasRepositoryFingerprint", () => {
 		const firstPath = join(root, "a.ts");
 		writeFileSync(firstPath, "export const a = 1;\n");
 		writeFileSync(join(root, "b.ts"), "export const b = 1;\n");
-		const cache = new AtlasRepositoryFingerprintCache(
-			() => Date.now() + 10_000,
-		);
+		let now = 10_000;
+		const cache = new AtlasRepositoryFingerprintCache(() => now);
 
 		const initial = await collectAtlasRepositoryFingerprint(root, {
 			contentCache: cache,
 		});
 		expect(cache.getStats()).toEqual({ entries: 2, hits: 0, misses: 2 });
+		now += 2_000;
 		expect((await collectAtlasRepositoryFingerprint(root, {
 			contentCache: cache,
 		})).fingerprint).toBe(initial.fingerprint);
@@ -173,13 +173,30 @@ describe("collectAtlasRepositoryFingerprint", () => {
 		expect(cache.getStats()).toEqual({ entries: 2, hits: 3, misses: 3 });
 	});
 
-	test("rehashes cache entries whose timestamps are racy with the cache write", () => {
-		const cache = new AtlasRepositoryFingerprintCache(() => 10_000);
+	test("rehashes entries until their content fingerprint stabilizes", () => {
+		let now = 10_000;
+		const cache = new AtlasRepositoryFingerprintCache(() => now);
 		cache.set("/repository/a.ts", "same-stat", "old-hash");
 
-		expect(cache.get("/repository/a.ts", "same-stat", 9_000)).toBeUndefined();
-		expect(cache.get("/repository/a.ts", "same-stat", 7_999)).toBe("old-hash");
-		expect(cache.getStats()).toEqual({ entries: 1, hits: 1, misses: 1 });
+		now = 11_000;
+		expect(cache.get("/repository/a.ts", "same-stat")).toBeUndefined();
+		cache.set("/repository/a.ts", "same-stat", "old-hash");
+		now = 12_000;
+		expect(cache.get("/repository/a.ts", "same-stat")).toBe("old-hash");
+		expect(cache.getStats()).toEqual({ entries: 1, hits: 1, misses: 2 });
+	});
+
+	test("restarts stabilization when same-stat content changes", () => {
+		let now = 10_000;
+		const cache = new AtlasRepositoryFingerprintCache(() => now);
+		cache.set("/repository/a.ts", "same-stat", "old-hash");
+
+		now = 11_000;
+		cache.set("/repository/a.ts", "same-stat", "new-hash");
+		now = 12_500;
+		expect(cache.get("/repository/a.ts", "same-stat")).toBeUndefined();
+		now = 13_000;
+		expect(cache.get("/repository/a.ts", "same-stat")).toBe("new-hash");
 	});
 
 	test("streams complete oversized files into the fingerprint", async () => {

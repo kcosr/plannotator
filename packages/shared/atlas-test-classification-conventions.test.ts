@@ -127,7 +127,7 @@ describe("conventional Atlas test classification", () => {
 			"    def test_connection(self):",
 			"        return True",
 			"class TestService:",
-			"    def test_request(self):",
+			"    def testRequest(self):",
 			"        return True",
 		].join("\n");
 		expect(classifyConventionalTestRanges(
@@ -152,12 +152,12 @@ describe("conventional Atlas test classification", () => {
 					members: [{
 						role: "member",
 						symbolType: "method",
-						name: "test_request",
+						name: "testRequest",
 						range: {
 							start: { line: 9, column: 4 },
 							end: { line: 10, column: 19 },
 						},
-						signature: "def test_request(self):",
+						signature: "def testRequest(self):",
 						astKind: "function_definition",
 					}],
 				}),
