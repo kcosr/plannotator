@@ -57,7 +57,7 @@ describe("Pi extension startup boundary", () => {
 		expect(browser.startMarkdownAnnotationSession).toBeFunction();
 	});
 
-	test("ships the lazy runtime in the npm package", () => {
+	test("ships the lazy runtime and todo providers in the npm package", () => {
 		const manifest = JSON.parse(
 			readFileSync(join(extensionDirectory, "package.json"), "utf-8"),
 		) as { files?: unknown };
@@ -65,5 +65,6 @@ describe("Pi extension startup boundary", () => {
 		expect(Array.isArray(manifest.files)).toBe(true);
 		expect(manifest.files).toContain("plannotator-browser-runtime.ts");
 		expect(manifest.files).toContain("codebase-atlas.html");
+		expect(manifest.files).toContain("todo-providers/");
 	});
 });

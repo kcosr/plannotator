@@ -18,7 +18,7 @@
  */
 
 import { existsSync, readFileSync, realpathSync, statSync } from "node:fs";
-import { basename, resolve } from "node:path";
+import { basename, relative, resolve } from "node:path";
 import type { ThinkingLevel } from "@earendil-works/pi-agent-core";
 import { Type } from "@earendil-works/pi-ai";
 import type {
@@ -26,7 +26,7 @@ import type {
 	ExtensionContext,
 } from "@earendil-works/pi-coding-agent";
 import { Key } from "@earendil-works/pi-tui";
-import { buildPromptVariables, formatTodoList, loadPlannotatorConfig, renderTemplate, resolvePhaseProfile } from "./config.ts";
+import { buildPromptVariables, formatTodoList, loadPlannotatorConfig, renderTemplate, resolveExecutionMode, resolvePhaseProfile } from "./config.ts";
 import {
 	type ChecklistItem,
 	markCompletedSteps,
@@ -45,8 +45,11 @@ import {
 	startLastMessageAnnotationSession,
 	startMarkdownAnnotationSession,
 	openPlanReviewBrowser,
+	PLANNOTATOR_PLAN_APPROVED_CHANNEL,
+	type PlannotatorPlanApprovedEvent,
 	registerPlannotatorEventListeners,
 } from "./plannotator-events.ts";
+import { resolveTodoProvider, type TodoProvider } from "./todo-providers/index.ts";
 import {
 	findAssistantMessageByEntryId,
 	getAssistantMessageText,
@@ -64,13 +67,15 @@ import {
 	withCurrentPiSessionFallbackHeader,
 } from "./current-pi-session.ts";
 import {
-	getToolsForPhase,
+	applyPhaseTools,
 	isPlanWritePathAllowed,
 	PLAN_SUBMIT_TOOL,
+	releasePhaseTools,
 	type Phase,
 	stripPlanningOnlyTools,
 } from "./tool-scope.ts";
 import { isRemoteSession } from "./server/network.ts";
+import { classifyAnnotateOutcome } from "./annotate-outcome.ts";
 
 // ── Types ──────────────────────────────────────────────────────────────
 
@@ -110,7 +115,6 @@ async function loadAnnotateCommandModules() {
 
 
 type SavedPhaseState = {
-	activeTools: string[];
 	model?: { provider: string; id: string };
 	thinkingLevel: ThinkingLevel;
 };
@@ -119,6 +123,7 @@ type PersistedPlannotatorState = {
 	phase: Phase;
 	lastSubmittedPath?: string;
 	savedState?: SavedPhaseState;
+	phaseAddedTools?: string[];
 };
 
 function getPlanReviewAvailabilityWarning(options: { hasUI: boolean; hasPlanHtml: boolean }): string | null {
@@ -259,8 +264,13 @@ export default function plannotator(pi: ExtensionAPI): void {
 	let lastSubmittedPath: string | null = null;
 	let checklistItems: ChecklistItem[] = [];
 	let savedState: SavedPhaseState | null = null;
+	let phaseAddedTools: string[] = [];
 	let plannotatorConfig = {};
 	let justApprovedPlan = false;
+	/** Resolved once per execution phase; undefined means widget-only. */
+	let todoProvider: TodoProvider | undefined;
+	/** Latch: no provider found, or one sync failed. Cleared on return to idle. */
+	let todoProviderDisabled = false;
 
 	pi.on("session_start", (_event, ctx) => {
 		currentPiSession.update(ctx);
@@ -321,18 +331,60 @@ export default function plannotator(pi: ExtensionAPI): void {
 		}
 	}
 
+	/**
+	 * Mirror the checklist into an editable todo provider, when one is present.
+	 *
+	 * Additive by design: the progress widget above stays exactly as it was.
+	 * pi-todos renders its list on demand in `/todos` and has no live surface,
+	 * so replacing the widget with it would trade a visible tracker for files
+	 * behind a keystroke. Failures are swallowed after one notification —
+	 * a todo mirror must never break plan execution. Runs even when the
+	 * checklist is empty so a resubmitted-empty plan still reconciles
+	 * (closing todos it used to own) instead of leaving them orphaned.
+	 */
+	async function syncTodoProvider(ctx: ExtensionContext): Promise<void> {
+		if (todoProviderDisabled) return;
+		if (phase !== "executing" || !lastSubmittedPath) return;
+		if (!todoProvider) {
+			todoProvider = resolveTodoProvider(loadConfig(), {
+				cwd: ctx.cwd,
+				sessionId: ctx.sessionManager.getSessionId(),
+			});
+			if (!todoProvider) {
+				todoProviderDisabled = true;
+				return;
+			}
+		}
+		// Tag on the cwd-relative path: it is stable across machines and reads
+		// cleanly in the /todos detail view, which renders raw tags.
+		const planId = relative(ctx.cwd, resolve(ctx.cwd, lastSubmittedPath)) || lastSubmittedPath;
+		try {
+			await todoProvider.sync(checklistItems, planId);
+		} catch (error) {
+			todoProviderDisabled = true;
+			ctx.ui.notify(
+				`Plannotator: ${todoProvider.name} sync failed, continuing with the progress widget only. ${
+					error instanceof Error ? error.message : String(error)
+				}`,
+				"warning",
+			);
+		}
+	}
+
 	function captureSavedState(ctx: ExtensionContext): void {
 		savedState = {
-			activeTools: pi.getActiveTools(),
 			model: ctx.model ? { provider: ctx.model.provider, id: ctx.model.id } : undefined,
 			thinkingLevel: pi.getThinkingLevel(),
 		};
 	}
 
 	function persistState(): void {
-
-
-		pi.appendEntry("plannotator", { phase, lastSubmittedPath, savedState });
+		pi.appendEntry("plannotator", {
+			phase,
+			lastSubmittedPath,
+			savedState,
+			phaseAddedTools,
+		});
 	}
 
 	async function applyModelRef(
@@ -355,11 +407,17 @@ export default function plannotator(pi: ExtensionAPI): void {
 	async function restoreSavedState(ctx: ExtensionContext): Promise<void> {
 		if (!savedState) return;
 
-		pi.setActiveTools(savedState.activeTools);
 		if (savedState.model) {
 			await applyModelRef(savedState.model, ctx, "restore");
 		}
 		pi.setThinkingLevel(savedState.thinkingLevel);
+	}
+
+	function releaseAddedPhaseTools(): void {
+		const activeTools = pi.getActiveTools();
+		const nextTools = releasePhaseTools(activeTools, phaseAddedTools);
+		phaseAddedTools = [];
+		if (nextTools.length !== activeTools.length) pi.setActiveTools(nextTools);
 	}
 
 	async function applyPhaseConfig(ctx: ExtensionContext, opts: { restoreSavedState?: boolean } = {}): Promise<void> {
@@ -369,13 +427,28 @@ export default function plannotator(pi: ExtensionAPI): void {
 		}
 
 		if (phase === "planning" || phase === "executing") {
-			const baseTools = stripPlanningOnlyTools(savedState?.activeTools ?? pi.getActiveTools());
-			const toolSet = new Set(baseTools);
-			for (const tool of profile?.activeTools ?? []) toolSet.add(tool);
-			if (phase === "planning") {
-				pi.setActiveTools(getToolsForPhase([...toolSet], phase));
-			} else {
-				pi.setActiveTools([...toolSet]);
+			const activeTools = pi.getActiveTools();
+			const configuredTools = profile?.activeTools ?? [];
+			// A user-supplied phases.planning.activeTools replaces the built-in list
+			// wholesale, so union the submit tool back in: the planning system prompt
+			// instructs the model to call it, and without it the phase is a dead end.
+			// It still flows through phaseAddedTools, so it is released on phase exit
+			// like any other addition (and is skipped if already active).
+			const phaseTools =
+				phase === "planning" && !configuredTools.includes(PLAN_SUBMIT_TOOL)
+					? [...configuredTools, PLAN_SUBMIT_TOOL]
+					: configuredTools;
+			const selection = applyPhaseTools(
+				activeTools,
+				phaseAddedTools,
+				phaseTools,
+			);
+			phaseAddedTools = selection.addedTools;
+			if (
+				selection.activeTools.length !== activeTools.length ||
+				selection.activeTools.some((tool, index) => tool !== activeTools[index])
+			) {
+				pi.setActiveTools(selection.activeTools);
 			}
 		}
 
@@ -389,6 +462,7 @@ export default function plannotator(pi: ExtensionAPI): void {
 
 		updateStatus(ctx);
 		updateWidget(ctx);
+		await syncTodoProvider(ctx);
 	}
 
 	async function enterPlanning(ctx: ExtensionContext): Promise<void> {
@@ -406,16 +480,31 @@ export default function plannotator(pi: ExtensionAPI): void {
 		}
 	}
 
-	async function exitToIdle(ctx: ExtensionContext): Promise<void> {
+	/**
+	 * The single exit sequence every idle transition shares: drop phase state,
+	 * hand back the tools the phase added, restore the pre-phase model/thinking
+	 * level, then refresh the UI and persist. Callers add their own messaging,
+	 * session entries, and events around it.
+	 */
+	async function returnToIdle(ctx: ExtensionContext): Promise<void> {
 		phase = "idle";
 		checklistItems = [];
 		lastSubmittedPath = null;
+		// Re-detect for the next plan: a provider that appeared (or a transient
+		// write failure) should not be decided once for the whole session.
+		todoProvider = undefined;
+		todoProviderDisabled = false;
 
+		releaseAddedPhaseTools();
 		await restoreSavedState(ctx);
 		savedState = null;
 		updateStatus(ctx);
 		updateWidget(ctx);
 		persistState();
+	}
+
+	async function exitToIdle(ctx: ExtensionContext): Promise<void> {
+		await returnToIdle(ctx);
 		ctx.ui.notify("Plannotator: disabled. Full access restored.");
 	}
 
@@ -425,6 +514,23 @@ export default function plannotator(pi: ExtensionAPI): void {
 		} else {
 			await exitToIdle(ctx);
 		}
+	}
+
+	async function handoffApprovedPlan(
+		ctx: ExtensionContext,
+		planFilePath: string,
+		planContent: string,
+		feedback?: string,
+	): Promise<void> {
+		pi.appendEntry("plannotator-handoff", { planFilePath });
+		await returnToIdle(ctx);
+		pi.events.emit(PLANNOTATOR_PLAN_APPROVED_CHANNEL, {
+			cwd: ctx.cwd,
+			planFilePath,
+			planContent,
+			...(feedback ? { feedback } : {}),
+		} satisfies PlannotatorPlanApprovedEvent);
+		ctx.ui.notify("Plannotator: approved plan handed off for external execution.");
 	}
 
 	// ── Commands & Shortcuts ─────────────────────────────────────────────
@@ -712,30 +818,44 @@ export default function plannotator(pi: ExtensionAPI): void {
 					.waitForDecision()
 					.then(async (result) => {
 						try {
-							if (result.exit) {
+							const outcome = classifyAnnotateOutcome(result);
+							if (outcome.notification === "closed") {
 								safeNotify(ctx, "Annotation session closed.", "info", origin);
 								return;
 							}
-							if (result.approved) {
-								safeNotify(ctx, "Annotation approved.", "info", origin);
-								return;
-							}
-							if (!result.feedback) {
+							if (!outcome.feedback) {
+								if (outcome.notification === "approved") {
+									safeNotify(ctx, "Annotation approved.", "info", origin);
+									return;
+								}
 								safeNotify(ctx, "Annotation closed (no feedback).", "info", origin);
 								return;
 							}
-							const { getAnnotateFileFeedbackPrompt } = await loadPlannotatorPrompts();
+							const {
+								getAnnotateApprovedWithNotesPrompt,
+								getAnnotateFileFeedbackPrompt,
+							} = await loadPlannotatorPrompts();
+							const context = `${isFolder ? "Folder" : "File"}: ${absolutePath}`;
+							const prompt = outcome.promptKind === "approved-with-notes"
+								? getAnnotateApprovedWithNotesPrompt("pi", loadConfig(), {
+										context,
+										feedback: outcome.feedback,
+									})
+								: getAnnotateFileFeedbackPrompt("pi", loadConfig(), {
+										fileHeader: isFolder ? "Folder" : "File",
+										filePath: absolutePath,
+										feedback: outcome.feedback,
+									});
 							sendUserMessageWithCurrentSessionFallback(
 								pi,
-								getAnnotateFileFeedbackPrompt("pi", loadConfig(), {
-									fileHeader: isFolder ? "Folder" : "File",
-									filePath: absolutePath,
-									feedback: result.feedback,
-								}),
+								prompt,
 								{ deliverAs: "followUp" },
 								"Plannotator annotation feedback could not be sent",
 								origin,
 							);
+							if (outcome.notification === "approved") {
+								safeNotify(ctx, "Annotation approved.", "info", origin);
+							}
 						} catch (err) {
 							reportBackgroundError(ctx, "Plannotator annotation feedback could not be sent", err, origin);
 						}
@@ -788,15 +908,16 @@ export default function plannotator(pi: ExtensionAPI): void {
 					.waitForDecision()
 					.then(async (result) => {
 						try {
-							if (result.exit) {
+							const outcome = classifyAnnotateOutcome(result);
+							if (outcome.notification === "closed") {
 								safeNotify(ctx, "Annotation session closed.", "info", origin);
 								return;
 							}
-							if (result.approved) {
-								safeNotify(ctx, "Message approved.", "info", origin);
-								return;
-							}
-							if (!result.feedback) {
+							if (!outcome.feedback) {
+								if (outcome.notification === "approved") {
+									safeNotify(ctx, "Message approved.", "info", origin);
+									return;
+								}
 								safeNotify(ctx, "Annotation closed (no feedback).", "info", origin);
 								return;
 							}
@@ -806,18 +927,29 @@ export default function plannotator(pi: ExtensionAPI): void {
 								? findAssistantMessageByEntryId(ctx, result.selectedMessageId) ?? snapshot
 								: snapshot;
 							const feedback = result.feedbackScope !== "messages" && shouldAnchorLastMessageFeedback(ctx, target.entryId, origin)
-									? anchorMessageFeedback(result.feedback, target.text)
-									: result.feedback;
-							const { getAnnotateMessageFeedbackPrompt } = await loadPlannotatorPrompts();
+									? anchorMessageFeedback(outcome.feedback, target.text)
+									: outcome.feedback;
+							const {
+								getAnnotateApprovedWithNotesPrompt,
+								getAnnotateMessageFeedbackPrompt,
+							} = await loadPlannotatorPrompts();
+							const prompt = outcome.promptKind === "approved-with-notes"
+								? getAnnotateApprovedWithNotesPrompt("pi", loadConfig(), {
+										feedback,
+									})
+								: getAnnotateMessageFeedbackPrompt("pi", loadConfig(), {
+										feedback,
+									});
 							sendUserMessageWithCurrentSessionFallback(
 								pi,
-								getAnnotateMessageFeedbackPrompt("pi", loadConfig(), {
-									feedback,
-								}),
+								prompt,
 								{ deliverAs: "followUp" },
 								"Plannotator message annotation feedback could not be sent",
 								origin,
 							);
+							if (outcome.notification === "approved") {
+								safeNotify(ctx, "Message approved.", "info", origin);
+							}
 						} catch (err) {
 							reportBackgroundError(ctx, "Plannotator message annotation feedback could not be sent", err, origin);
 						}
@@ -956,6 +1088,15 @@ export default function plannotator(pi: ExtensionAPI): void {
 
 			// Non-interactive or no HTML: auto-approve
 			if (!ctx.hasUI || !hasPlanBrowserHtml()) {
+				if (resolveExecutionMode(plannotatorConfig) === "external") {
+					await handoffApprovedPlan(ctx, inputPath, planContent);
+					return {
+						content: [{ type: "text", text: "Plan approved and handed off for external execution." }],
+						details: { approved: true, handedOff: true },
+						terminate: true,
+					};
+				}
+
 				phase = "executing";
 				await applyPhaseConfig(ctx, { restoreSavedState: true });
 				pi.appendEntry("plannotator-execute", { lastSubmittedPath });
@@ -987,6 +1128,19 @@ export default function plannotator(pi: ExtensionAPI): void {
 			}
 
 			if (result.approved) {
+				if (resolveExecutionMode(plannotatorConfig) === "external") {
+					await handoffApprovedPlan(ctx, inputPath, planContent, result.feedback);
+					return {
+						content: [{ type: "text", text: "Plan approved and handed off for external execution." }],
+						details: {
+							approved: true,
+							handedOff: true,
+							...(result.feedback ? { feedback: result.feedback } : {}),
+						},
+						terminate: true,
+					};
+				}
+
 				phase = "executing";
 				await applyPhaseConfig(ctx, { restoreSavedState: true });
 				pi.appendEntry("plannotator-execute", { lastSubmittedPath });
@@ -1126,9 +1280,9 @@ export default function plannotator(pi: ExtensionAPI): void {
 					content: `[PLANNOTATOR - PLANNING PHASE]
 You are in plan mode. You MUST NOT make any changes to the codebase — no edits, no commits, no installs, no destructive commands. During planning you may only write or edit markdown files (.md, .mdx) inside the working directory.
 
-Available tools: read, bash, grep, find, ls, write (markdown only), edit (markdown only), ${PLAN_SUBMIT_TOOL}
+Use the available reading, searching, and command tools to explore the codebase. Use the available file tools only for markdown plan files.
 
-Do not run destructive bash commands (rm, git push, npm install, etc.) — focus on reading and exploring the codebase. Web fetching (curl, wget) is fine.
+Do not run destructive commands (rm, git push, npm install, etc.) — focus on reading and exploring the codebase. Web fetching is fine.
 
 ## Iterative Planning Workflow
 
@@ -1142,8 +1296,8 @@ Choose a descriptive filename for your plan. Convention: \`PLAN.md\` at the repo
 
 Repeat this cycle until the plan is complete:
 
-1. **Explore** — Use read, grep, find, ls, and bash to understand the codebase. Actively search for existing functions, utilities, and patterns that can be reused — avoid proposing new code when suitable implementations already exist.
-2. **Update the plan file** — After each discovery, immediately capture what you learned in the plan. Don't wait until the end. Use write for the initial draft, then edit for all subsequent updates.
+1. **Explore** — Use the available reading, searching, and command tools to understand the codebase. Actively search for existing functions, utilities, and patterns that can be reused — avoid proposing new code when suitable implementations already exist.
+2. **Update the plan file** — After each discovery, immediately capture what you learned in the plan. Don't wait until the end. Use the available file tools to create the initial draft and make targeted updates.
 3. **Ask the user** — When you hit an ambiguity or decision you can't resolve from code alone, ask. Then go back to step 1.
 
 ### First Turn
@@ -1179,7 +1333,7 @@ Your plan is ready when you've addressed all ambiguities and it covers: what to 
 
 When the user denies a plan with feedback:
 1. Read the plan file to see the current plan.
-2. Use the edit tool to make targeted changes addressing the feedback — do NOT rewrite the entire file.
+2. Make targeted changes addressing the feedback — do NOT rewrite the entire file.
 3. Call ${PLAN_SUBMIT_TOOL} again with the same filePath to resubmit.
 
 ### Ending Your Turn
@@ -1252,6 +1406,7 @@ Execute each step in order. After completing a step, include [DONE:n] in your re
 		if (markCompletedSteps(text, checklistItems) > 0) {
 			updateStatus(ctx);
 			updateWidget(ctx);
+			await syncTodoProvider(ctx);
 		}
 		persistState();
 	});
@@ -1287,15 +1442,7 @@ Execute each step in order. After completing a step, include [DONE:n] in your re
 				},
 				{ triggerTurn: false },
 			);
-			phase = "idle";
-			checklistItems = [];
-			lastSubmittedPath = null;
-
-			await restoreSavedState(ctx);
-			savedState = null;
-			updateStatus(ctx);
-			updateWidget(ctx);
-			persistState();
+			await returnToIdle(ctx);
 		}
 	});
 
@@ -1325,6 +1472,11 @@ Execute each step in order. After completing a step, include [DONE:n] in your re
 			phase = stateEntry.data.phase ?? phase;
 			lastSubmittedPath = stateEntry.data.lastSubmittedPath ?? lastSubmittedPath;
 			savedState = stateEntry.data.savedState ?? savedState;
+			phaseAddedTools = stateEntry.data.phaseAddedTools ?? phaseAddedTools;
+		}
+
+		if (phase === "planning" && !savedState) {
+			captureSavedState(ctx);
 		}
 
 		// Rebuild execution state from disk + session messages
@@ -1374,15 +1526,14 @@ Execute each step in order. After completing a step, include [DONE:n] in your re
 		}
 
 		if (phase === "idle") {
+			releaseAddedPhaseTools();
 			if (savedState) {
 				await restoreSavedState(ctx);
 				savedState = null;
-			} else {
-				// Strip planning-only tools on fresh sessions where savedState is null.
-				// Without this, plannotator_submit_plan stays in the active tool set
-				// even though plan mode hasn't been activated. See #387.
-				pi.setActiveTools(stripPlanningOnlyTools(pi.getActiveTools()));
 			}
+			const activeTools = pi.getActiveTools();
+			const idleTools = stripPlanningOnlyTools(activeTools);
+			if (idleTools.length !== activeTools.length) pi.setActiveTools(idleTools);
 		} else if (phase === "planning" || phase === "executing") {
 			await applyPhaseConfig(ctx, { restoreSavedState: true });
 		}
